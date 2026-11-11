@@ -81,3 +81,6 @@ export const pushRequestSchema = z.object({
   contentId: z.string().uuid(),
 });
 export type PushRequest = z.infer<typeof pushRequestSchema>;
+
+/** Koneksi Device sah yang lebih baru telah mengambil alih. */
+export const DEVICE_REPLACED_CLOSE_CODE = 4009;

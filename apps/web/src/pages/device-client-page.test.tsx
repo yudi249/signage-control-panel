@@ -116,6 +116,48 @@ it("1008 menghentikan tayangan dan retry sampai pengguna mengganti token", () =>
   expect(screen.queryByText("Pertama")).toBeNull();
 });
 
+it("4009 menghentikan playback dan seluruh timer sampai Hubungkan kembali memverifikasi token tersimpan", () => {
+  start();
+  act(() => socket().message(playlist()));
+  const old = socket();
+  const lateMessage = old.onmessage;
+  const lateError = old.onerror;
+  act(() => old.disconnect(4009, "Replaced"));
+  expect(screen.getByText("Device digunakan di tempat lain")).toBeTruthy();
+  expect(screen.queryByText("Pertama")).toBeNull();
+  advance(120000);
+  expect(TestSocket.instances).toHaveLength(1);
+  expect(vi.getTimerCount()).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Hubungkan kembali" }));
+  expect(TestSocket.instances).toHaveLength(2);
+  act(() => {
+    lateMessage?.({ data: JSON.stringify(push("Usang")) });
+    lateError?.();
+    socket().open();
+  });
+  expect(socket().send).toHaveBeenCalledWith(JSON.stringify({ type: "hello", deviceId: route.id, token: "token-rahasia" }));
+  expect(screen.queryByText("Usang")).toBeNull();
+  act(() => socket().disconnect(1008, "Token dirotasi"));
+  expect(screen.getByRole("button", { name: "Ganti token" })).toBeTruthy();
+  advance(120000);
+  expect(TestSocket.instances).toHaveLength(2);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it("Hubungkan kembali memulai satu percobaan dan menerapkan sync terbaru dari awal", () => {
+  start();
+  act(() => socket().message(playlist()));
+  advance(2000);
+  act(() => socket().disconnect(4009));
+  fireEvent.click(screen.getByRole("button", { name: "Hubungkan kembali" }));
+  act(() => { socket().open(); socket().message(playlist("Terbaru", "Selanjutnya")); });
+  expect(screen.getByText("Terbaru")).toBeTruthy();
+  advance(15000);
+  expect(TestSocket.instances).toHaveLength(2);
+  expect(socket().send).toHaveBeenCalledWith(JSON.stringify({ type: "heartbeat" }));
+  expect(screen.queryByRole("button", { name: "Hubungkan kembali" })).toBeNull();
+});
+
 it("error jaringan menjadwalkan satu retry meski disusul close dari percobaan lama", () => {
   start();
   act(() => socket().message(push("Tetap tersedia")));

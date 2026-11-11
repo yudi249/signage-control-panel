@@ -212,7 +212,11 @@ Dua endpoint dengan peran berbeda. Semua pesan berupa JSON `{ type, ...data }` d
 
 ### `/ws/device` (Device Client)
 
-Autentikasi: device token dikirim saat handshake. Token tak dikenal ditolak sebelum koneksi dibuka.
+Autentikasi: setelah WebSocket terbuka, pesan pertama harus `hello` berisi `deviceId` dan `token`. Token tidak dikirim melalui URL. Identitas/token tidak sah ditolak dengan close `1008`; satu socket hanya memproses satu handshake, termasuk selama autentikasi async.
+
+Koneksi sah terbaru mengambil alih Device yang sama. Koneksi lama ditutup dengan kode aplikasi `4009` (`DEVICE_REPLACED_CLOSE_CODE` dari `packages/shared`), berbeda dari penolakan akses `1008` dan gangguan sementara `1011`. Urutan pembukaan socket menentukan koneksi terbaru meskipun autentikasi lama selesai belakangan.
+
+Registry mengikat message, close, error, heartbeat, timeout, dan hasil async ke identitas koneksi. Hasil sync lama hanya boleh dikirim ke socket asal yang masih aktif. Penulisan Presence diurutkan per Device, diperiksa sebelum operasi dan sebelum siaran; penulisan yang sudah berjalan diselesaikan sebelum Presence pengganti ditulis, sehingga hasil akhirnya tetap mengikuti koneksi terbaru.
 
 | Arah | Pesan | Isi |
 | --- | --- | --- |
@@ -271,7 +275,8 @@ Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan
 penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
 Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
 halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
-Timeout connect/sync, watchdog acknowledgment, dan pengambilalihan koneksi mengikuti
+Tiket 04 menerapkan pengambilalihan koneksi dengan close `4009`, penghentian terminal
+dan pemulihan manual. Timeout connect/sync dan watchdog acknowledgment mengikuti
 tiket lanjutan tahap 6. Tiket 05 menerapkan reset Presence sebelum startup server
 seperti dijelaskan di bawah.
 
@@ -280,7 +285,7 @@ seperti dijelaskan di bawah.
 - Selama gangguan sementara (termasuk close 1011), Content terakhir tetap tampil dan Playlist terus berputar. Indikator kecil menyediakan tombol Coba sekarang. Sebelum `sync` pertama, tampilkan Menghubungkan.
 - Keadaan tayangan hanya dipertahankan di memori selama halaman terbuka. Tidak ada jaminan pemulihan setelah refresh offline atau caching media; gambar, video, dan URL tetap bergantung pada jaringan/cache browser.
 - Penolakan identitas/token (1008) menghentikan retry dan tayangan, lalu menampilkan pesan serta tindakan Ganti token.
-- Koneksi terbaru Device mengambil alih. Koneksi lama ditutup dengan kode khusus, menghentikan tayangan/retry otomatis, dan menampilkan Hubungkan kembali. Callback socket lama tidak boleh memengaruhi registry/heartbeat socket baru.
+- Koneksi terbaru Device yang terautentikasi mengambil alih. Koneksi lama ditutup dengan `4009`, menghentikan tayangan/heartbeat/retry otomatis dan timer, lalu menampilkan Device digunakan di tempat lain serta Hubungkan kembali. Tombol itu memulai satu percobaan memakai token tersimpan; token diverifikasi ulang, dan penolakan `1008` masuk ke Ganti token. Callback socket lama tidak boleh memengaruhi registry/heartbeat socket baru. Tidak ada perebutan ulang otomatis antar halaman.
 - Setiap `sync` baru menerapkan keadaan server terbaru dan memulai Playlist dari item pertama. Tombol retry manual, pergantian Device/token, dan unmount membersihkan percobaan lama sehingga hanya satu percobaan aktif.
 - Sebelum listen pada startup satu instance, reset status tersimpan semua Device ke Offline tanpa mengubah Last Seen. Kegagalan reset menggagalkan startup. Device yang reconnect ditandai Online kembali.
   Jalur proses `main.ts` memanggil `startServer` di `startup.ts`: aplikasi dirakit, `devices.resetAllOffline` diselesaikan melalui repository devices, baru `listen` dijalankan. Kegagalan reset dicatat dengan konteks startup, aplikasi ditutup, dan proses berakhir gagal. Pembuatan aplikasi lewat `buildApp` untuk pengujian maupun reconnect tidak menjalankan reset. Tanpa konfigurasi database/layanan devices, tidak ada Presence tersimpan yang direset.
