@@ -1,0 +1,30 @@
+{
+  "name": "@signage/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Device Client desktop Signage Control Panel",
+  "author": "Signage Control Panel",
+  "type": "module",
+  "main": "src/main.mjs",
+  "scripts": {
+    "dev": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "build": "electron-builder --dir --win --x64",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.56.0"
+  },
+  "build": {
+    "appId": "id.signage.deviceclient",
+    "productName": "Signage Device Client",
+    "asar": true,
+    "directories": { "output": "dist" },
+    "files": ["src/**/*", "package.json"],
+    "win": { "target": "nsis", "signAndEditExecutable": false },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false }
+  }
+}
