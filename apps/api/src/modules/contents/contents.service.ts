@@ -19,6 +19,10 @@ export class ContentsService {
     return content;
   }
 
+  async findById(id: string): Promise<Content | null> {
+    return this.repo.findById(id);
+  }
+
   create(input: CreateContent): Promise<Content> {
     return this.repo.create(input);
   }

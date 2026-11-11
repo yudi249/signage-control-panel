@@ -7,10 +7,10 @@ import {
   type PresenceMessage,
   type SnapshotMessage,
   type SyncMessage,
+  type SyncPlaylistItem,
 } from "@signage/shared";
 import type { Content } from "@signage/shared";
 import { createHash, timingSafeEqual } from "node:crypto";
-import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
 function toWs(socket: WebSocket | { socket: WebSocket }): WebSocket {
@@ -40,6 +40,10 @@ interface ContentsApi {
   get?(id: string): Promise<Content>;
 }
 
+interface PlaylistsApi {
+  get(deviceId: string): Promise<SyncPlaylistItem[]>;
+}
+
 interface ContentRow {
   id: string;
   judul: string;
@@ -59,12 +63,20 @@ export class PresenceService {
   private readonly db: Db | null;
   private readonly devices: DevicesApi | null;
   private readonly contents: ContentsApi | null;
+  private readonly playlists: PlaylistsApi | null;
   private readonly app: any;
 
-  constructor(app: any, db: Db | null, devices: DevicesApi | null, contents: ContentsApi | null = null) {
+  constructor(
+    app: any,
+    db: Db | null,
+    devices: DevicesApi | null,
+    contents: ContentsApi | null = null,
+    playlists: PlaylistsApi | null = null,
+  ) {
     this.db = db;
     this.devices = devices;
     this.contents = contents;
+    this.playlists = playlists;
     this.app = app;
   }
 
@@ -178,7 +190,7 @@ export class PresenceService {
       this.register(deviceId, socket);
       const updated = await this.devices.setPresence(deviceId, "online");
       this.broadcastPresence(deviceId, "online", updated?.lastSeen ?? new Date().toISOString());
-      await this.sendSync(deviceId, device.pushedContentId ?? null);
+      await this.sendSync(deviceId);
 
       socket.off("message", onFirstMessage);
       socket.on("message", (data) => void this.onMessage(deviceId!, data));
@@ -289,18 +301,60 @@ export class PresenceService {
     };
   }
 
-  private buildSync(pushed: Content | null): SyncMessage {
+  private async resolvePlaylist(deviceId: string): Promise<SyncPlaylistItem[]> {
+    if (this.playlists) {
+      try {
+        const items = await this.playlists.get(deviceId);
+        return Array.isArray(items) ? items : [];
+      } catch {
+        return [];
+      }
+    }
+    if (!this.db) return [];
+    const { data, error } = await this.db
+      .from("playlist_items")
+      .select("position,duration_seconds,content:contents(id,judul,tipe,payload,created_at)")
+      .eq("device_id", deviceId)
+      .order("position", { ascending: true });
+    if (error || !data) return [];
+    const rows = data as any[];
+    return rows.map((row) => {
+      const contentRow = Array.isArray(row.content) ? row.content[0] : row.content;
+      return {
+        position: row.position,
+        durationSeconds: row.duration_seconds,
+        content: {
+          id: contentRow.id,
+          judul: contentRow.judul,
+          tipe: contentRow.tipe,
+          payload: contentRow.payload,
+          createdAt: contentRow.created_at,
+        } as Content,
+      };
+    });
+  }
+
+  private buildSync(pushed: Content | null, playlist: SyncPlaylistItem[]): SyncMessage {
     if (pushed) {
-      return syncMessageSchema.parse({ type: "sync", mode: "push", pushed, playlist: [] });
+      return syncMessageSchema.parse({ type: "sync", mode: "push", pushed, playlist });
+    }
+    if (playlist.length > 0) {
+      return syncMessageSchema.parse({ type: "sync", mode: "playlist", pushed: null, playlist });
     }
     return syncMessageSchema.parse({ type: "sync", mode: "idle", pushed: null, playlist: [] });
   }
 
-  async sendSync(deviceId: string, pushedContentId: string | null): Promise<void> {
+  async sendSync(deviceId: string, pushedContentId?: string | null): Promise<void> {
     const conn = this.connections.get(deviceId);
     if (!conn || conn.socket.readyState !== 1) return;
-    const pushed = await this.resolveContent(pushedContentId);
-    const msg = this.buildSync(pushed);
+    let pushedId = pushedContentId;
+    if (pushedId === undefined) {
+      const device = this.devices ? await this.devices.findById(deviceId) : null;
+      pushedId = device?.pushedContentId ?? null;
+    }
+    const pushed = await this.resolveContent(pushedId ?? null);
+    const playlist = await this.resolvePlaylist(deviceId);
+    const msg = this.buildSync(pushed, playlist);
     conn.socket.send(JSON.stringify(msg));
   }
 
