@@ -8,6 +8,7 @@ import {
   type SnapshotMessage,
   type SyncMessage,
 } from "@signage/shared";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
 
@@ -24,6 +25,7 @@ interface DevicePresenceState {
   status: "online" | "offline";
   lastSeen: string | null;
   pushedContentId?: string | null;
+  tokenHash?: string;
 }
 
 interface DevicesApi {
@@ -56,9 +58,9 @@ export class PresenceService {
   private readonly db: Db | null;
   private readonly devices: DevicesApi | null;
   private readonly contents: ContentsApi | null;
-  private readonly app: FastifyInstance;
+  private readonly app: any;
 
-  constructor(app: FastifyInstance, db: Db | null, devices: DevicesApi | null, contents: ContentsApi | null = null) {
+  constructor(app: any, db: Db | null, devices: DevicesApi | null, contents: ContentsApi | null = null) {
     this.db = db;
     this.devices = devices;
     this.contents = contents;
@@ -136,12 +138,12 @@ export class PresenceService {
       try {
         parsed = JSON.parse(text);
       } catch {
-        socket.close(1008, "Invalid JSON");
+        socket.close(1008, "Format pesan tidak valid");
         return;
       }
       const msg = deviceClientMessageSchema.safeParse(parsed);
       if (!msg.success || msg.data.type !== "hello") {
-        socket.close(1008, "Expected hello");
+        socket.close(1008, "Pesan hello tidak valid");
         return;
       }
       if (!this.devices) {
@@ -150,7 +152,25 @@ export class PresenceService {
       }
       const device = await this.devices.findById(msg.data.deviceId);
       if (!device) {
-        socket.close(1008, "Unknown device");
+        socket.close(1008, "Device tidak terdaftar");
+        return;
+      }
+      const token = (msg.data as any).token as string | undefined;
+      if (!token) {
+        socket.close(1008, "Token perangkat tidak valid");
+        return;
+      }
+      const expectedHash = device.tokenHash ?? "";
+      const providedHash = createHash("sha256").update(token).digest("hex");
+      let ok = false;
+      try {
+        ok = !!expectedHash && expectedHash.length === providedHash.length &&
+          timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(providedHash, "hex"));
+      } catch {
+        ok = false;
+      }
+      if (!ok) {
+        socket.close(1008, "Token perangkat tidak valid");
         return;
       }
       deviceId = device.id;
@@ -169,6 +189,17 @@ export class PresenceService {
     socket.on("close", () => {
       socket.off("message", onFirstMessage);
     });
+  }
+
+  async disconnectDevice(deviceId: string, reason = "Koneksi diputus"): Promise<void> {
+    const conn = this.connections.get(deviceId);
+    if (!conn) return;
+    try {
+      conn.socket.close(1000, reason);
+    } catch {
+      // ignore
+    }
+    await this.onClose(deviceId);
   }
 
   private register(deviceId: string, socket: WebSocket): void {

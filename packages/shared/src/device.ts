@@ -22,3 +22,9 @@ export type CreateDevice = z.infer<typeof createDeviceSchema>;
 
 export const updateDeviceSchema = createDeviceSchema.partial();
 export type UpdateDevice = z.infer<typeof updateDeviceSchema>;
+
+export const deviceWithTokenSchema = z.object({
+  device: deviceSchema,
+  token: z.string().min(1),
+});
+export type DeviceWithToken = z.infer<typeof deviceWithTokenSchema>;

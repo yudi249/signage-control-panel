@@ -9,9 +9,9 @@ export interface AuthModuleOptions {
   config: Config;
 }
 
-export async function verifyAdminRequest(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+export async function verifyAdminRequest(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
   try {
-    await request.jwtVerify();
+    await (request as any).jwtVerify();
   } catch {
     throw unauthorized("Token tidak valid atau kedaluwarsa");
   }
@@ -30,7 +30,7 @@ export const authModule: FastifyPluginAsync<AuthModuleOptions> = async (app, opt
     if (!usernameOk || !passwordOk) {
       return reply.status(401).send({ message: "Nama pengguna atau kata sandi salah" });
     }
-    const token = app.jwt.sign({ role: "admin", username: body.username }, { expiresIn: "30m" });
+    const token = (app as any).jwt.sign({ role: "admin", username: body.username }, { expiresIn: "30m" });
     return reply.send(adminLoginResponseSchema.parse({ token }));
   });
 };

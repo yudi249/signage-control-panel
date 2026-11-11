@@ -5,7 +5,7 @@ import { createEventBus } from "./platform/events.ts";
 
 const AUTH = {
   ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD_HASH: "$2b$10$Ez3iVupN5E7xvshVCt7XJuaFDAVieChUV6bafDL6prs.gVOE4i9uq", // "adminpass"
+  ADMIN_PASSWORD_HASH: "713bfda78870bf9d1b261f565286f85e97ee614efe5f0faf7c34e7ca4f65baca", // "adminpass"
   JWT_SECRET: "test-secret-1234567890",
 } as const;
 
@@ -139,3 +139,4 @@ describe("admin auth", () => {
     admin.close();
   });
 });
+

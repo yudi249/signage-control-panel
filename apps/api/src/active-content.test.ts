@@ -5,7 +5,7 @@ import { createEventBus } from "./platform/events.ts";
 
 const AUTH = {
   ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD_HASH: "$2b$10$Ez3iVupN5E7xvshVCt7XJuaFDAVieChUV6bafDL6prs.gVOE4i9uq", // "adminpass"
+  ADMIN_PASSWORD_HASH: "713bfda78870bf9d1b261f565286f85e97ee614efe5f0faf7c34e7ca4f65baca", // "adminpass"
   JWT_SECRET: "test-secret-1234567890",
 } as const;
 
@@ -48,8 +48,10 @@ describe("active content per device", () => {
     const deviceId = "11111111-1111-4111-8111-111111111111";
     const contentId = "22222222-2222-4222-8222-222222222222";
     const devices = new Map<string, any>([
-      [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null }],
+      [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null, tokenHash: "3dcb3f..." }],
     ]);
+    // pre-hash for token "dev-token"
+    devices.get(deviceId).tokenHash = (await import("node:crypto")).createHash("sha256").update("dev-token").digest("hex");
     const contents = new Map<string, any>([
       [contentId, { id: contentId, judul: "Halo", tipe: "text", payload: "hai", createdAt: "2026-11-11T10:00:00.000Z" }],
     ]);
@@ -90,7 +92,7 @@ describe("active content per device", () => {
     const device = new WebSocket(`${base}/ws/device`);
     await waitForOpen(device);
     const initialSyncP = waitForMessage(device, (m) => m.type === "sync");
-    device.send(JSON.stringify({ type: "hello", deviceId }));
+    device.send(JSON.stringify({ type: "hello", deviceId, token: "dev-token" }));
     const initial = await initialSyncP;
     expect(initial.content).toBeNull();
 
@@ -111,7 +113,7 @@ describe("active content per device", () => {
   it("clears active content and syncs null", async () => {
     const deviceId = "11111111-1111-4111-8111-111111111111";
     const devices = new Map<string, any>([
-      [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: "22222222-2222-4222-8222-222222222222" }],
+      [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: "22222222-2222-4222-8222-222222222222", tokenHash: (await import("node:crypto")).createHash("sha256").update("dev-token").digest("hex") }],
     ]);
     const devicesService = {
       list: vi.fn(async () => Array.from(devices.values())),
@@ -145,7 +147,7 @@ describe("active content per device", () => {
 
     const device = new WebSocket(`${base}/ws/device`);
     await waitForOpen(device);
-    device.send(JSON.stringify({ type: "hello", deviceId }));
+    device.send(JSON.stringify({ type: "hello", deviceId, token: "dev-token" }));
     await waitForMessage(device, (m) => m.type === "sync");
 
     const syncP = waitForMessage(device, (m) => m.type === "sync" && m.content === null);
@@ -199,3 +201,4 @@ describe("active content per device", () => {
     expect(badBody.statusCode).toBe(400);
   });
 });
+

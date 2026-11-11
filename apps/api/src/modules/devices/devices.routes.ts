@@ -14,6 +14,7 @@ interface ContentsLookup {
 
 interface PresenceNotifier {
   sendSync(deviceId: string, pushedContentId: string | null): Promise<void>;
+  disconnectDevice?(deviceId: string, reason?: string): Promise<void> | void;
 }
 
 export interface DevicesRoutesOptions {
@@ -40,8 +41,8 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
 
   app.post("/devices", async (req, reply) => {
     const body = createDeviceSchema.parse(req.body);
-    const device = await service.create(body);
-    return reply.status(201).send(device);
+    const deviceWithToken = await service.createWithToken(body);
+    return reply.status(201).send(deviceWithToken);
   });
 
   app.get("/devices/:id", async (req) => {
@@ -59,6 +60,15 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
     const { id } = idParams.parse(req.params);
     await service.delete(id);
     return reply.status(204).send();
+  });
+
+  app.post("/devices/:id/token", async (req) => {
+    const { id } = idParams.parse(req.params);
+    const rotated = await service.rotateToken(id);
+    if (presenceService?.disconnectDevice) {
+      await presenceService.disconnectDevice(id, "Token perangkat dirotasi");
+    }
+    return rotated;
   });
 
   app.put("/devices/:id/active-content", async (req) => {
