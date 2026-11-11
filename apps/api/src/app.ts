@@ -10,6 +10,7 @@ import type { Config } from "./platform/config.ts";
 import { AppError, unauthorized } from "./platform/errors.ts";
 import type { EventBus } from "./platform/events.ts";
 import type { Db } from "./platform/supabase.ts";
+import type { ContentStorage } from "./modules/contents/index.ts";
 
 export interface BuildAppOptions {
   config: Config;
@@ -18,6 +19,7 @@ export interface BuildAppOptions {
   devicesService?: DevicesService | null;
   contentsService?: ContentsService | null;
   presenceService?: PresenceService | null;
+  storage?: ContentStorage | null;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
@@ -81,7 +83,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     contentsService,
     presenceService,
   });
-  await app.register(contentsModule, { prefix: "/api", db: opts.db, service: contentsService ?? undefined });
+  await app.register(contentsModule, {
+    prefix: "/api",
+    db: opts.db,
+    service: contentsService ?? undefined,
+    storage: opts.storage ?? undefined,
+    bucket: opts.config.SUPABASE_STORAGE_BUCKET ?? "contents",
+  });
   await app.register(playlistsModule, { prefix: "/api" });
 
   await app.register(presenceModule, {
