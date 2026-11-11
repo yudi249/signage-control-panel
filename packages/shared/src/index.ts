@@ -1,2 +1,2 @@
-export * from "./content";
-export * from "./device";
+export * from "./content.ts";
+export * from "./device.ts";
