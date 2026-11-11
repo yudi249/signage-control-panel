@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Rahasia: hanya .env.example yang di-commit
+.env
+.env.*
+!.env.example
