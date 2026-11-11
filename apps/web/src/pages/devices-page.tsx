@@ -50,7 +50,7 @@ export function DevicesPage() {
   const [editing, setEditing] = useState<Device | null>(null);
   const [deleting, setDeleting] = useState<Device | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [activeContentError, setActiveContentError] = useState<string | null>(null);
+  const [pushError, setPushError] = useState<string | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [rotatingId, setRotatingId] = useState<string | null>(null);
   const [tokenReveal, setTokenReveal] = useState<{
@@ -199,29 +199,29 @@ export function DevicesPage() {
     onError: (err) => setActionError(errorMessage(err)),
   });
 
-  const setActiveContentMutation = useMutation({
+  const pushMutation = useMutation({
     mutationFn: async ({ deviceId, contentId }: { deviceId: string; contentId: string }) => {
       setPendingDeviceId(deviceId);
-      return api.put<Device>(`/api/devices/${deviceId}/active-content`, { contentId });
+      return api.post<Device>(`/api/devices/${deviceId}/push`, { contentId });
     },
     onSuccess: async () => {
-      setActiveContentError(null);
+      setPushError(null);
       await qc.invalidateQueries({ queryKey: ["devices"] });
     },
-    onError: (err) => setActiveContentError(errorMessage(err)),
+    onError: (err) => setPushError(errorMessage(err)),
     onSettled: () => setPendingDeviceId(null),
   });
 
-  const clearActiveContentMutation = useMutation({
+  const releaseMutation = useMutation({
     mutationFn: async (deviceId: string) => {
       setPendingDeviceId(deviceId);
-      return api.delete<Device>(`/api/devices/${deviceId}/active-content`);
+      return api.delete<Device>(`/api/devices/${deviceId}/push`);
     },
     onSuccess: async () => {
-      setActiveContentError(null);
+      setPushError(null);
       await qc.invalidateQueries({ queryKey: ["devices"] });
     },
-    onError: (err) => setActiveContentError(errorMessage(err)),
+    onError: (err) => setPushError(errorMessage(err)),
     onSettled: () => setPendingDeviceId(null),
   });
 
@@ -270,7 +270,7 @@ export function DevicesPage() {
         },
       }),
       columnHelper.accessor("pushedContentId", {
-        header: "Konten aktif",
+        header: "Push konten",
         cell: ({ row }) => {
           const device = row.original;
           const busy = pendingDeviceId === device.id;
@@ -283,9 +283,9 @@ export function DevicesPage() {
                 disabled={busy || contentsQuery.isLoading}
                 onChange={(e) => {
                   const value = e.target.value;
-                  setActiveContentError(null);
+                  setPushError(null);
                   if (!value) return;
-                  setActiveContentMutation.mutate({ deviceId: device.id, contentId: value });
+                  pushMutation.mutate({ deviceId: device.id, contentId: value });
                 }}
               >
                 <option value="">(tidak ada)</option>
@@ -300,11 +300,11 @@ export function DevicesPage() {
                 size="sm"
                 disabled={busy || !device.pushedContentId}
                 onClick={() => {
-                  setActiveContentError(null);
-                  clearActiveContentMutation.mutate(device.id);
+                  setPushError(null);
+                  releaseMutation.mutate(device.id);
                 }}
               >
-                Kosongkan
+                Release
               </Button>
             </div>
           );
@@ -344,13 +344,13 @@ export function DevicesPage() {
       }),
     ],
     [
-      clearActiveContentMutation,
       contentsQuery.data,
       contentsQuery.isLoading,
       pendingDeviceId,
+      pushMutation,
+      releaseMutation,
       rotateTokenMutation,
       rotatingId,
-      setActiveContentMutation,
     ],
   );
 
@@ -382,7 +382,7 @@ export function DevicesPage() {
           {devicesQuery.isError && (
             <p className="text-sm text-destructive">{errorMessage(devicesQuery.error)}</p>
           )}
-          {activeContentError && <p className="mb-2 text-sm text-destructive">{activeContentError}</p>}
+          {pushError && <p className="mb-2 text-sm text-destructive">{pushError}</p>}
           {rotateError && <p className="mb-2 text-sm text-destructive">{rotateError}</p>}
           {devicesQuery.isSuccess && (
             <Table>

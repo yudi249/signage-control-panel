@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { buildApp } from "./app.ts";
 import { createEventBus } from "./platform/events.ts";
@@ -38,19 +38,18 @@ async function authHeader(app: any): Promise<{ authorization: string }> {
   return { authorization: `Bearer ${res.json().token}` };
 }
 
-describe("active content per device", () => {
+describe("push/release and full-state sync", () => {
   const apps: any[] = [];
   afterEach(async () => {
     await Promise.all(apps.splice(0).map((a) => a.close()));
   });
 
-  it("sets active content, persists it, and syncs connected device immediately", async () => {
+  it("POST /devices/:id/push sets pushed content and syncs connected device immediately", async () => {
     const deviceId = "11111111-1111-4111-8111-111111111111";
     const contentId = "22222222-2222-4222-8222-222222222222";
     const devices = new Map<string, any>([
       [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null, tokenHash: "3dcb3f..." }],
     ]);
-    // pre-hash for token "dev-token"
     devices.get(deviceId).tokenHash = (await import("node:crypto")).createHash("sha256").update("dev-token").digest("hex");
     const contents = new Map<string, any>([
       [contentId, { id: contentId, judul: "Halo", tipe: "text", payload: "hai", createdAt: "2026-11-11T10:00:00.000Z" }],
@@ -94,15 +93,16 @@ describe("active content per device", () => {
     const initialSyncP = waitForMessage(device, (m) => m.type === "sync");
     device.send(JSON.stringify({ type: "hello", deviceId, token: "dev-token" }));
     const initial = await initialSyncP;
-    expect(initial.content).toBeNull();
+    expect(initial).toMatchObject({ type: "sync", mode: "idle", pushed: null, playlist: [] });
 
-    const syncP = waitForMessage(device, (m) => m.type === "sync" && m.content?.id === contentId);
-    const res = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId }, headers });
+    const syncP = waitForMessage(device, (m) => m.type === "sync" && m.mode === "push" && m.pushed?.id === contentId);
+    const res = await app.inject({ method: "POST", url: `/api/devices/${deviceId}/push`, payload: { contentId }, headers });
     expect(res.statusCode).toBe(200);
     expect(res.json().pushedContentId).toBe(contentId);
 
     const sync = await syncP;
-    expect(sync.content.judul).toBe("Halo");
+    expect(sync.pushed.judul).toBe("Halo");
+    expect(sync.playlist).toEqual([]);
 
     const getRes = await app.inject({ method: "GET", url: `/api/devices/${deviceId}`, headers });
     expect(getRes.json().pushedContentId).toBe(contentId);
@@ -110,7 +110,7 @@ describe("active content per device", () => {
     device.close();
   });
 
-  it("clears active content and syncs null", async () => {
+  it("DELETE /devices/:id/push releases and syncs idle when playlist empty", async () => {
     const deviceId = "11111111-1111-4111-8111-111111111111";
     const devices = new Map<string, any>([
       [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: "22222222-2222-4222-8222-222222222222", tokenHash: (await import("node:crypto")).createHash("sha256").update("dev-token").digest("hex") }],
@@ -150,16 +150,16 @@ describe("active content per device", () => {
     device.send(JSON.stringify({ type: "hello", deviceId, token: "dev-token" }));
     await waitForMessage(device, (m) => m.type === "sync");
 
-    const syncP = waitForMessage(device, (m) => m.type === "sync" && m.content === null);
-    const res = await app.inject({ method: "DELETE", url: `/api/devices/${deviceId}/active-content`, headers });
+    const syncP = waitForMessage(device, (m) => m.type === "sync" && m.mode === "idle" && m.pushed === null);
+    const res = await app.inject({ method: "DELETE", url: `/api/devices/${deviceId}/push`, headers });
     expect(res.statusCode).toBe(200);
     expect(res.json().pushedContentId).toBeNull();
     const sync = await syncP;
-    expect(sync.content).toBeNull();
+    expect(sync.playlist).toEqual([]);
     device.close();
   });
 
-  it("returns clear errors for invalid device or content", async () => {
+  it("returns clear errors for invalid device/content and removes old active-content endpoints", async () => {
     const deviceId = "11111111-1111-4111-8111-111111111111";
     const devices = new Map<string, any>([
       [deviceId, { id: deviceId, nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null }],
@@ -189,16 +189,20 @@ describe("active content per device", () => {
     apps.push(app);
     const headers = await authHeader(app);
 
-    const badDevice = await app.inject({ method: "PUT", url: "/api/devices/99999999-9999-4999-8999-999999999999/active-content", payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
+    const badDevice = await app.inject({ method: "POST", url: "/api/devices/99999999-9999-4999-8999-999999999999/push", payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
     expect(badDevice.statusCode).toBe(404);
     expect(badDevice.json().message).toMatch(/Device/i);
 
-    const badContent = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
+    const badContent = await app.inject({ method: "POST", url: `/api/devices/${deviceId}/push`, payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
     expect(badContent.statusCode).toBe(404);
     expect(badContent.json().message).toMatch(/Content/i);
 
-    const badBody = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: {}, headers });
+    const badBody = await app.inject({ method: "POST", url: `/api/devices/${deviceId}/push`, payload: {}, headers });
     expect(badBody.statusCode).toBe(400);
+
+    const oldPut = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
+    expect(oldPut.statusCode).toBe(404);
+    const oldDel = await app.inject({ method: "DELETE", url: `/api/devices/${deviceId}/active-content`, headers });
+    expect(oldDel.statusCode).toBe(404);
   });
 });
-

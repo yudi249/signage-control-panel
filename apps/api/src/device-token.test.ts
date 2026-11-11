@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+﻿import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { buildApp } from "./app.ts";
@@ -204,7 +204,7 @@ describe("device token and /ws/device auth", () => {
     const syncP = waitForMessage(wsOk, (m) => m.type === "sync");
     wsOk.send(JSON.stringify({ type: "hello", deviceId, token }));
     const sync = await syncP;
-    expect(sync.content?.id).toBe(content.id);
+    expect(sync).toMatchObject({ type: "sync", mode: "push" }); expect(sync.pushed?.id).toBe(content.id); expect(sync.playlist).toEqual([]);
     const online = await onlineP;
     expect(online.deviceId).toBe(deviceId);
 
@@ -217,4 +217,6 @@ describe("device token and /ws/device auth", () => {
     admin.close();
   });
 });
+
+
 

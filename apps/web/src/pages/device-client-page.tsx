@@ -73,7 +73,7 @@ export function DeviceClientPage() {
   const { id } = useParams({ from: "/device/$id" });
   const [token, setToken] = useState<string | null>(() => getStoredToken(id));
   const [tokenDraft, setTokenDraft] = useState("");
-  const [content, setContent] = useState<Content | null | undefined>(undefined);
+  const [sync, setSync] = useState<SyncMessage | undefined>(undefined);
   const [state, setState] = useState<ScreenState>(() =>
     getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" },
   );
@@ -88,7 +88,7 @@ export function DeviceClientPage() {
 
   useEffect(() => {
     setToken(getStoredToken(id));
-    setContent(undefined);
+    setSync(undefined);
     attemptRef.current = 0;
     setState(getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" });
   }, [id]);
@@ -103,7 +103,7 @@ export function DeviceClientPage() {
       clearStoredToken(id);
       setToken(null);
       setTokenDraft("");
-      setContent(undefined);
+      setSync(undefined);
       attemptRef.current = 0;
       setState({ kind: "needs-token", notice });
     },
@@ -155,7 +155,7 @@ export function DeviceClientPage() {
           const msg = syncMessageSchema.safeParse(parsed) as
             | { success: true; data: SyncMessage }
             | { success: false };
-          if (msg.success) setContent(msg.data.content);
+          if (msg.success) setSync(msg.data);
         } catch {
           // ignore non-json
         }
@@ -220,7 +220,7 @@ export function DeviceClientPage() {
               if (!value) return;
               setStoredToken(id, value);
               setToken(value);
-              setContent(undefined);
+              setSync(undefined);
               attemptRef.current = 0;
               setState({ kind: "connecting" });
             }}
@@ -264,7 +264,7 @@ export function DeviceClientPage() {
     );
   }
 
-  if (state.kind === "connecting" || content === undefined) {
+  if (state.kind === "connecting" || sync === undefined) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
         <p className="text-sm text-neutral-400">Menghubungkan perangkat...</p>
@@ -272,16 +272,16 @@ export function DeviceClientPage() {
     );
   }
 
-  if (content === null) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
-        <div className="space-y-2 text-center">
-          <p className="text-2xl font-semibold">Menunggu konten</p>
-          <p className="text-sm text-neutral-400">Belum ada konten aktif untuk perangkat ini.</p>
-        </div>
-      </div>
-    );
+  if (sync.mode === "push" && sync.pushed) {
+    return <div className="h-screen w-screen bg-black text-white">{renderContent(sync.pushed)}</div>;
   }
 
-  return <div className="h-screen w-screen bg-black text-white">{renderContent(content)}</div>;
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
+      <div className="space-y-2 text-center">
+        <p className="text-2xl font-semibold">Menunggu konten</p>
+        <p className="text-sm text-neutral-400">Belum ada konten aktif untuk perangkat ini.</p>
+      </div>
+    </div>
+  );
 }
