@@ -31,6 +31,11 @@ interface DevicesApi {
   setPresence(id: string, status: "online" | "offline"): Promise<DevicePresenceState | null>;
 }
 
+interface ContentsApi {
+  findById?(id: string): Promise<SyncMessage["content"] | null>;
+  get?(id: string): Promise<SyncMessage["content"]>;
+}
+
 interface ContentRow {
   id: string;
   judul: string;
@@ -49,10 +54,12 @@ export class PresenceService {
   private readonly adminSockets = new Set<WebSocket>();
   private readonly db: Db | null;
   private readonly devices: DevicesApi | null;
+  private readonly contents: ContentsApi | null;
 
-  constructor(app: FastifyInstance, db: Db | null, devices: DevicesApi | null) {
+  constructor(app: FastifyInstance, db: Db | null, devices: DevicesApi | null, contents: ContentsApi | null = null) {
     this.db = db;
     this.devices = devices;
+    this.contents = contents;
     void app;
   }
 
@@ -194,7 +201,18 @@ export class PresenceService {
   }
 
   private async resolveContent(contentId: string | null): Promise<SyncMessage["content"]> {
-    if (!contentId || !this.db) return null;
+    if (!contentId) return null;
+    if (this.contents) {
+      if (this.contents.findById) return this.contents.findById(contentId);
+      if (this.contents.get) {
+        try {
+          return await this.contents.get(contentId);
+        } catch {
+          return null;
+        }
+      }
+    }
+    if (!this.db) return null;
     const { data, error } = await this.db
       .from("contents")
       .select("id,judul,tipe,payload,created_at")
