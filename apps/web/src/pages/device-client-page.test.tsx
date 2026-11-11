@@ -51,6 +51,204 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it("connect yang macet dibatalkan pada 15 detik lalu retry dengan backoff bertambah", () => {
+  render(<DeviceClientPage />);
+  const old = socket();
+  const lateOpen = old.onopen;
+  const lateMessage = old.onmessage;
+  const lateClose = old.onclose;
+  const lateError = old.onerror;
+  advance(14999);
+  expect(old.close).not.toHaveBeenCalled();
+  advance(1);
+  expect(old.close).toHaveBeenCalledOnce();
+  expect(screen.getByText("Menghubungkan perangkat...")).toBeTruthy();
+  advance(499);
+  expect(TestSocket.instances).toHaveLength(1);
+  advance(1);
+  act(() => {
+    lateOpen?.();
+    lateMessage?.({ data: JSON.stringify(push("Usang")) });
+    lateClose?.({ code: 1008, reason: "Usang" });
+    lateError?.();
+  });
+  expect(old.send).not.toHaveBeenCalled();
+  expect(screen.queryByText("Usang")).toBeNull();
+  advance(15000);
+  expect(socket().close).toHaveBeenCalledOnce();
+  advance(999);
+  expect(TestSocket.instances).toHaveLength(2);
+  advance(1);
+  expect(TestSocket.instances).toHaveLength(3);
+});
+
+it("sync pertama dibatasi 15 detik sejak open; pesan malformed tidak menunda retry", () => {
+  render(<DeviceClientPage />);
+  advance(14000);
+  act(() => socket().open());
+  const old = socket();
+  const lateMessage = old.onmessage;
+  const lateClose = old.onclose;
+  const lateError = old.onerror;
+  advance(1000);
+  expect(old.close).not.toHaveBeenCalled();
+  advance(13999);
+  act(() => {
+    old.message({ type: "sync" });
+    old.onmessage?.({ data: "bukan JSON" });
+  });
+  expect(old.close).not.toHaveBeenCalled();
+  advance(1);
+  expect(old.close).toHaveBeenCalledOnce();
+  expect(screen.getByText("Menghubungkan perangkat...")).toBeTruthy();
+  advance(500);
+  expect(TestSocket.instances).toHaveLength(2);
+  act(() => socket().open());
+  advance(15000);
+  advance(999);
+  expect(TestSocket.instances).toHaveLength(2);
+  advance(1);
+  expect(TestSocket.instances).toHaveLength(3);
+  act(() => {
+    socket().open();
+    socket().message(push("Sync terbaru"));
+    lateMessage?.({ data: JSON.stringify(push("Sync usang")) });
+    lateClose?.({ code: 1008, reason: "Usang" });
+    lateError?.();
+  });
+  advance(15000);
+  expect(screen.getByText("Sync terbaru")).toBeTruthy();
+  expect(screen.queryByText("Sync usang")).toBeNull();
+  expect(TestSocket.instances).toHaveLength(3);
+});
+
+it("open dan sync valid tepat sebelum batas membatalkan timeout masing-masing fase", () => {
+  render(<DeviceClientPage />);
+  advance(14999);
+  act(() => socket().open());
+  advance(14999);
+  act(() => socket().message(push("Berhasil sebelum batas")));
+  advance(15001);
+  expect(screen.getByText("Berhasil sebelum batas")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Coba sekarang" })).toBeNull();
+  expect(socket().close).not.toHaveBeenCalled();
+  expect(TestSocket.instances).toHaveLength(1);
+});
+
+it.each(["connect", "sync"])("retry manual membatalkan timeout %s lama tanpa mematikan percobaan baru", (phase) => {
+  render(<DeviceClientPage />);
+  if (phase === "sync") act(() => socket().open());
+  const old = socket();
+  advance(14000);
+  fireEvent.click(screen.getByRole("button", { name: "Coba sekarang" }));
+  const current = socket();
+  advance(1000);
+  expect(old.close).toHaveBeenCalledOnce();
+  expect(current.close).not.toHaveBeenCalled();
+  expect(TestSocket.instances).toHaveLength(2);
+  act(() => { current.open(); current.message(push("Percobaan baru")); });
+  advance(15000);
+  expect(screen.getByText("Percobaan baru")).toBeTruthy();
+  expect(TestSocket.instances).toHaveLength(2);
+});
+
+it.each(["connect", "sync"])("unmount membatalkan timeout %s dan semua callback percobaan", (phase) => {
+  const view = render(<DeviceClientPage />);
+  if (phase === "sync") act(() => socket().open());
+  const old = socket();
+  const callbacks = [old.onopen, old.onerror];
+  const lateMessage = old.onmessage;
+  const lateClose = old.onclose;
+  advance(14000);
+  view.unmount();
+  act(() => {
+    callbacks.forEach((callback) => callback?.());
+    lateMessage?.({ data: JSON.stringify(push("Setelah unmount")) });
+    lateClose?.({ code: 1006, reason: "" });
+  });
+  expect(vi.getTimerCount()).toBe(0);
+  advance(120000);
+  expect(TestSocket.instances).toHaveLength(1);
+  expect(old.close).toHaveBeenCalledOnce();
+});
+
+it.each(["connect", "sync"])("pergantian Device membatalkan timeout %s dan callback identitas lama", (phase) => {
+  const originalId = route.id;
+  const view = render(<DeviceClientPage />);
+  if (phase === "sync") act(() => socket().open());
+  const old = socket();
+  const lateOpen = old.onopen;
+  const lateMessage = old.onmessage;
+  const lateClose = old.onclose;
+  const lateError = old.onerror;
+  advance(14000);
+  try {
+    route.id = "33333333-3333-4333-8333-333333333333";
+    localStorage.setItem(`device-token:${route.id}`, "token-baru");
+    view.rerender(<DeviceClientPage />);
+    act(() => {
+      lateOpen?.();
+      lateMessage?.({ data: JSON.stringify(push("Identitas lama")) });
+      lateClose?.({ code: 1008, reason: "Usang" });
+      lateError?.();
+    });
+    advance(1000);
+    expect(socket().close).not.toHaveBeenCalled();
+    act(() => { socket().open(); socket().message(push("Identitas baru")); });
+    advance(15000);
+    expect(screen.getByText("Identitas baru")).toBeTruthy();
+    expect(screen.queryByText("Identitas lama")).toBeNull();
+    expect(TestSocket.instances).toHaveLength(2);
+  } finally { route.id = originalId; }
+});
+
+it("penggantian token membatalkan timeout sync dan callback token lama", () => {
+  start();
+  const old = socket();
+  const lateMessage = old.onmessage;
+  const lateClose = old.onclose;
+  const lateError = old.onerror;
+  advance(14000);
+  act(() => old.disconnect(1008, "Token ditolak"));
+  expect(vi.getTimerCount()).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Ganti token" }));
+  fireEvent.change(screen.getByLabelText("Token perangkat"), { target: { value: "token-pengganti" } });
+  fireEvent.click(screen.getByRole("button", { name: "Simpan dan hubungkan" }));
+  act(() => {
+    lateMessage?.({ data: JSON.stringify(push("Token lama")) });
+    lateClose?.({ code: 1008, reason: "Usang" });
+    lateError?.();
+  });
+  advance(1000);
+  expect(socket().close).not.toHaveBeenCalled();
+  act(() => { socket().open(); socket().message(push("Token baru")); });
+  expect(socket().send).toHaveBeenCalledWith(JSON.stringify({ type: "hello", deviceId: route.id, token: "token-pengganti" }));
+  advance(15000);
+  expect(screen.getByText("Token baru")).toBeTruthy();
+  expect(TestSocket.instances).toHaveLength(2);
+});
+
+it.each(["push", "playlist"])("tayangan %s tetap berjalan selama timeout connect dan sync serta retry", (mode) => {
+  start();
+  act(() => socket().message(mode === "push" ? push("Tetap tampil") : playlist()));
+  act(() => socket().disconnect());
+  advance(500);
+  // Langkah kecil membiarkan React menjadwalkan item Playlist berikutnya.
+  for (let i = 0; i < 7; i++) advance(2000);
+  advance(1000);
+  expect(socket().close).toHaveBeenCalledOnce();
+  expect(screen.getByText(mode === "push" ? "Tetap tampil" : "Kedua")).toBeTruthy();
+  advance(1000);
+  act(() => socket().open());
+  for (let i = 0; i < 7; i++) advance(2000);
+  advance(1000);
+  expect(socket().close).toHaveBeenCalledOnce();
+  expect(screen.getByText(mode === "push" ? "Tetap tampil" : "Kedua")).toBeTruthy();
+  advance(2000);
+  act(() => { socket().open(); socket().message(playlist("Pulih dari awal", "Lanjut")); });
+  expect(screen.getByText("Pulih dari awal")).toBeTruthy();
+});
+
 it.each([0, 0.5, 1])("retry berjitter tanpa batas (%s) dan hanya sync valid me-reset backoff", (random) => {
   vi.mocked(Math.random).mockReturnValue(random);
   start();
@@ -176,6 +374,7 @@ it("pergantian Device membersihkan percobaan dan tidak membawa token/tayangan De
     act(() => {
       lateMessage?.({ data: JSON.stringify(push("Pesan Device lama")) });
       socket().open();
+      socket().message(push("Device baru"));
     });
     expect(screen.queryByText("Device lama")).toBeNull();
     expect(screen.queryByText("Pesan Device lama")).toBeNull();

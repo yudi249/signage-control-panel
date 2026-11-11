@@ -271,7 +271,14 @@ Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan
 penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
 Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
 halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
-Timeout connect/sync, watchdog acknowledgment, dan pengambilalihan koneksi mengikuti
+Tiket 02 menerapkan timeout connect dan sync pertama, masing-masing 15 detik:
+open membatalkan timeout connect dan memulai timeout sync; hanya sync valid
+membatalkan penantian sync. Timeout membersihkan percobaan lalu memakai backoff
+yang sama, sambil mempertahankan Content/Playlist. Retry manual, pergantian
+Device/token, dan unmount membersihkan kedua timeout; callback percobaan lama
+diabaikan. Tes halaman mencakup batas waktu, keberhasilan sebelum batas,
+pembatalan, callback usang, dan kelanjutan playback selama timeout/retry.
+Watchdog acknowledgment dan pengambilalihan koneksi mengikuti
 tiket lanjutan tahap 6. Tiket 05 menerapkan reset Presence sebelum startup server
 seperti dijelaskan di bawah.
 

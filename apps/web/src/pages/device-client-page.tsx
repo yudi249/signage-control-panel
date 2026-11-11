@@ -120,12 +120,18 @@ function DeviceClient({ id }: { id: string }) {
     let closed = false;
     let heartbeat: number | undefined;
     let reconnect: number | undefined;
+    let connectTimeout: number | undefined;
+    let syncTimeout: number | undefined;
 
     function cancelAttempt() {
       window.clearTimeout(reconnect);
       window.clearInterval(heartbeat);
+      window.clearTimeout(connectTimeout);
+      window.clearTimeout(syncTimeout);
       reconnect = undefined;
       heartbeat = undefined;
+      connectTimeout = undefined;
+      syncTimeout = undefined;
       const previous = ws;
       ws = null;
       if (previous) {
@@ -160,8 +166,16 @@ function DeviceClient({ id }: { id: string }) {
       }
 
       const isActive = () => !closed && ws === current;
+      connectTimeout = window.setTimeout(() => {
+        if (isActive()) scheduleReconnect();
+      }, 15000);
       current.onopen = () => {
         if (!isActive()) return;
+        window.clearTimeout(connectTimeout);
+        connectTimeout = undefined;
+        syncTimeout = window.setTimeout(() => {
+          if (isActive()) scheduleReconnect();
+        }, 15000);
         current.send(JSON.stringify({ type: "hello", deviceId: id, token }));
         window.clearInterval(heartbeat);
         heartbeat = window.setInterval(() => {
@@ -175,6 +189,8 @@ function DeviceClient({ id }: { id: string }) {
           const parsed = JSON.parse(String(ev.data));
           const msg = syncMessageSchema.safeParse(parsed);
           if (msg.success) {
+            window.clearTimeout(syncTimeout);
+            syncTimeout = undefined;
             attemptRef.current = 0;
             setState({ kind: "connected" });
             setPlaylistIndex(0);
