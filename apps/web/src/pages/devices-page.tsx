@@ -7,8 +7,19 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { AdminServerMessage, Content, CreateDevice, Device, UpdateDevice } from "@signage/shared";
-import { adminClientMessageSchema, adminServerMessageSchema } from "@signage/shared";
+import type {
+  AdminServerMessage,
+  Content,
+  CreateDevice,
+  Device,
+  DeviceWithToken,
+  UpdateDevice,
+} from "@signage/shared";
+import {
+  adminClientMessageSchema,
+  adminServerMessageSchema,
+  deviceWithTokenSchema,
+} from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
 import { getToken, handleAuthFailure } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
@@ -40,6 +51,14 @@ export function DevicesPage() {
   const [deleting, setDeleting] = useState<Device | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeContentError, setActiveContentError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [tokenReveal, setTokenReveal] = useState<{
+    token: string;
+    deviceName: string;
+    context: "create" | "rotate";
+  } | null>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
 
   const devicesQuery = useQuery({
@@ -127,15 +146,46 @@ export function DevicesPage() {
   const saveMutation = useMutation({
     mutationFn: async (values: CreateDevice | UpdateDevice) => {
       if (editing) return api.patch<Device>(`/api/devices/${editing.id}`, values);
-      return api.post<Device>("/api/devices", values);
+      const res = await api.post<DeviceWithToken>("/api/devices", values);
+      return deviceWithTokenSchema.parse(res);
     },
-    onSuccess: async () => {
+    onSuccess: async (result, _values, _ctx) => {
       await qc.invalidateQueries({ queryKey: ["devices"] });
       setFormOpen(false);
+      const wasEditing = !!editing;
+      const name = editing?.nama;
       setEditing(null);
       setActionError(null);
+      if (!wasEditing) {
+        const created = result as DeviceWithToken;
+        setCopyNotice(null);
+        setTokenReveal({
+          token: created.token,
+          deviceName: created.device.nama,
+          context: "create",
+        });
+      } else if (name) {
+        // no token reveal on edit
+        void name;
+      }
     },
     onError: (err) => setActionError(errorMessage(err)),
+  });
+
+  const rotateTokenMutation = useMutation({
+    mutationFn: async (device: Device) => {
+      setRotatingId(device.id);
+      const res = await api.post<DeviceWithToken>(`/api/devices/${device.id}/token`, {});
+      return { parsed: deviceWithTokenSchema.parse(res), deviceName: device.nama };
+    },
+    onSuccess: async ({ parsed, deviceName }) => {
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+      setRotateError(null);
+      setCopyNotice(null);
+      setTokenReveal({ token: parsed.token, deviceName, context: "rotate" });
+    },
+    onError: (err) => setRotateError(errorMessage(err)),
+    onSettled: () => setRotatingId(null),
   });
 
   const deleteMutation = useMutation({
@@ -144,6 +194,7 @@ export function DevicesPage() {
       await qc.invalidateQueries({ queryKey: ["devices"] });
       setDeleting(null);
       setActionError(null);
+      setRotateError(null);
     },
     onError: (err) => setActionError(errorMessage(err)),
   });
@@ -263,9 +314,20 @@ export function DevicesPage() {
         id: "actions",
         header: "Aksi",
         cell: ({ row }) => (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => openEdit(row.original)}>
               Ubah
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={rotatingId === row.original.id}
+              onClick={() => {
+                setRotateError(null);
+                rotateTokenMutation.mutate(row.original);
+              }}
+            >
+              {rotatingId === row.original.id ? "Memutar..." : "Rotasi token"}
             </Button>
             <Button
               variant="destructive"
@@ -281,7 +343,15 @@ export function DevicesPage() {
         ),
       }),
     ],
-    [clearActiveContentMutation, contentsQuery.data, contentsQuery.isLoading, pendingDeviceId, setActiveContentMutation],
+    [
+      clearActiveContentMutation,
+      contentsQuery.data,
+      contentsQuery.isLoading,
+      pendingDeviceId,
+      rotateTokenMutation,
+      rotatingId,
+      setActiveContentMutation,
+    ],
   );
 
   const table = useReactTable({
@@ -289,6 +359,16 @@ export function DevicesPage() {
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
+
+  async function copyToken() {
+    if (!tokenReveal) return;
+    try {
+      await navigator.clipboard.writeText(tokenReveal.token);
+      setCopyNotice("Token disalin.");
+    } catch {
+      setCopyNotice("Gagal menyalin otomatis. Salin token secara manual.");
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -303,6 +383,7 @@ export function DevicesPage() {
             <p className="text-sm text-destructive">{errorMessage(devicesQuery.error)}</p>
           )}
           {activeContentError && <p className="mb-2 text-sm text-destructive">{activeContentError}</p>}
+          {rotateError && <p className="mb-2 text-sm text-destructive">{rotateError}</p>}
           {devicesQuery.isSuccess && (
             <Table>
               <TableHeader>
@@ -415,6 +496,48 @@ export function DevicesPage() {
               onClick={() => deleting && deleteMutation.mutate(deleting.id)}
             >
               {deleteMutation.isPending ? "Menghapus..." : "Hapus"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={!!tokenReveal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTokenReveal(null);
+            setCopyNotice(null);
+          }
+        }}
+        title={tokenReveal?.context === "rotate" ? "Token baru device" : "Token device baru"}
+      >
+        <div className="space-y-4">
+          <p className="text-sm">
+            Device token untuk <strong>{tokenReveal?.deviceName}</strong>{" "}
+            {tokenReveal?.context === "rotate" ? "berhasil dirotasi." : "berhasil dibuat."}
+          </p>
+          <div className="rounded-md border bg-muted p-3">
+            <p className="break-all font-mono text-sm">{tokenReveal?.token}</p>
+          </div>
+          <p className="text-sm font-medium text-destructive">
+            Salin token ini sekarang. Token hanya ditampilkan sekali dan tidak akan ditampilkan lagi di daftar, detail, atau form ubah Device.{" "}
+            {tokenReveal?.context === "rotate"
+              ? "Token lama sudah tidak berlaku; perbarui token pada Device Client."
+              : "Gunakan token ini untuk memasangkan Device Client."}
+          </p>
+          {copyNotice && <p className="text-sm text-muted-foreground">{copyNotice}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => void copyToken()}>
+              Salin token
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setTokenReveal(null);
+                setCopyNotice(null);
+              }}
+            >
+              Saya sudah menyalin
             </Button>
           </div>
         </div>
