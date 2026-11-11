@@ -8,8 +8,9 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import type { AdminServerMessage, Content, CreateDevice, Device, UpdateDevice } from "@signage/shared";
-import { adminServerMessageSchema } from "@signage/shared";
+import { adminClientMessageSchema, adminServerMessageSchema } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
+import { getToken, handleAuthFailure } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
@@ -52,8 +53,25 @@ export function DevicesPage() {
   });
 
   useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      handleAuthFailure();
+      return;
+    }
+
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${window.location.host}/ws/admin`);
+    let opened = false;
+
+    const failAuth = () => {
+      handleAuthFailure();
+    };
+
+    const onOpen = () => {
+      opened = true;
+      const authMsg = adminClientMessageSchema.parse({ type: "auth", token });
+      ws.send(JSON.stringify(authMsg));
+    };
 
     const onMessage = (ev: MessageEvent) => {
       try {
@@ -81,9 +99,27 @@ export function DevicesPage() {
       }
     };
 
+    const onClose = () => {
+      if (!opened) {
+        failAuth();
+        return;
+      }
+      failAuth();
+    };
+
+    const onError = () => {
+      failAuth();
+    };
+
+    ws.addEventListener("open", onOpen);
     ws.addEventListener("message", onMessage);
+    ws.addEventListener("close", onClose);
+    ws.addEventListener("error", onError);
     return () => {
+      ws.removeEventListener("open", onOpen);
       ws.removeEventListener("message", onMessage);
+      ws.removeEventListener("close", onClose);
+      ws.removeEventListener("error", onError);
       try { ws.close(); } catch { /* ignore */ }
     };
   }, [qc]);

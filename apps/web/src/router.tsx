@@ -1,4 +1,4 @@
-import {
+﻿import {
   Outlet,
   createRootRoute,
   createRoute,
@@ -6,18 +6,40 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { RootLayout } from "@/components/root-layout";
+import { isAuthenticated } from "@/lib/auth";
 import { ContentsPage } from "@/pages/contents-page";
 import { DeviceClientPage } from "@/pages/device-client-page";
 import { DevicesPage } from "@/pages/devices-page";
+import { LoginPage } from "@/pages/login-page";
 
 const rootRoute = createRootRoute({
   component: () => <Outlet />,
+});
+
+function requireAuth() {
+  if (!isAuthenticated()) {
+    throw redirect({ to: "/login" });
+  }
+}
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: LoginPage,
+  beforeLoad: () => {
+    if (isAuthenticated()) {
+      throw redirect({ to: "/devices" });
+    }
+  },
 });
 
 const dashboardLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "dashboard",
   component: RootLayout,
+  beforeLoad: () => {
+    requireAuth();
+  },
 });
 
 const indexRoute = createRoute({
@@ -47,6 +69,7 @@ const deviceClientRoute = createRoute({
 });
 
 const routeTree = rootRoute.addChildren([
+  loginRoute,
   dashboardLayoutRoute.addChildren([indexRoute, devicesRoute, contentsRoute]),
   deviceClientRoute,
 ]);
