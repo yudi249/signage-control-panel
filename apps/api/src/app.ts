@@ -1,11 +1,13 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import websocket from "@fastify/websocket";
-import { authModule } from "./modules/auth/index.ts";
+import fastifyJwt from "@fastify/jwt";
+import { authModule, verifyAdminRequest } from "./modules/auth/index.ts";
 import { contentsModule, ContentsRepository, ContentsService } from "./modules/contents/index.ts";
 import { devicesModule, DevicesRepository, DevicesService } from "./modules/devices/index.ts";
 import { playlistsModule } from "./modules/playlists/index.ts";
 import { presenceModule, PresenceService } from "./modules/presence/index.ts";
 import type { Config } from "./platform/config.ts";
+import { AppError, unauthorized } from "./platform/errors.ts";
 import type { EventBus } from "./platform/events.ts";
 import type { Db } from "./platform/supabase.ts";
 
@@ -21,6 +23,32 @@ export interface BuildAppOptions {
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
   await app.register(websocket);
+  if (opts.config.JWT_SECRET) {
+    await app.register(fastifyJwt, { secret: opts.config.JWT_SECRET });
+  }
+
+  app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof AppError) {
+      return reply.status(error.statusCode).send({ message: error.message });
+    }
+    const err = error as any;
+    if (err?.name === "ZodError") {
+      return reply.status(400).send({ message: "Data tidak valid", issues: err.issues });
+    }
+    if (err?.statusCode === 401 || err?.code === "FST_JWT_NO_AUTHORIZATION_IN_HEADER" || err?.code === "FST_JWT_AUTHORIZATION_TOKEN_INVALID" || err?.code === "FST_JWT_AUTHORIZATION_TOKEN_EXPIRED") {
+      return reply.status(401).send({ message: "Token tidak valid atau kedaluwarsa" });
+    }
+    const message = error instanceof Error ? error.message : "Terjadi kesalahan";
+    return reply.status(500).send({ message });
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    const url = request.raw.url ?? "";
+    if (!url.startsWith("/api/")) return;
+    if (url === "/api/auth/login") return;
+    if (!opts.config.JWT_SECRET) return; // auth not configured (e.g. legacy contexts)
+    await verifyAdminRequest(request, reply);
+  });
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -45,7 +73,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         ? new PresenceService(app, opts.db, devicesService, contentsService)
         : null;
 
-  await app.register(authModule, { prefix: "/api" });
+  await app.register(authModule, { prefix: "/api", config: opts.config });
   await app.register(devicesModule, {
     prefix: "/api",
     db: opts.db,

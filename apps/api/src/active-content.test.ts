@@ -1,7 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { buildApp } from "./app.ts";
 import { createEventBus } from "./platform/events.ts";
+
+const AUTH = {
+  ADMIN_USERNAME: "admin",
+  ADMIN_PASSWORD_HASH: "$2b$10$Ez3iVupN5E7xvshVCt7XJuaFDAVieChUV6bafDL6prs.gVOE4i9uq", // "adminpass"
+  JWT_SECRET: "test-secret-1234567890",
+} as const;
 
 function waitForMessage(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 2000): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -25,6 +31,11 @@ function waitForOpen(ws: WebSocket): Promise<void> {
     ws.once("open", () => resolve());
     ws.once("error", reject);
   });
+}
+
+async function authHeader(app: any): Promise<{ authorization: string }> {
+  const res = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "adminpass" } });
+  return { authorization: `Bearer ${res.json().token}` };
 }
 
 describe("active content per device", () => {
@@ -65,7 +76,7 @@ describe("active content per device", () => {
     };
 
     const app = await buildApp({
-      config: { HOST: "127.0.0.1", PORT: 0 } as any,
+      config: { HOST: "127.0.0.1", PORT: 0, ...AUTH } as any,
       db: null,
       events: createEventBus(),
       devicesService: devicesService as any,
@@ -74,6 +85,7 @@ describe("active content per device", () => {
     apps.push(app);
     const addr = await app.listen({ host: "127.0.0.1", port: 0 });
     const base = addr.replace("http", "ws");
+    const headers = await authHeader(app);
 
     const device = new WebSocket(`${base}/ws/device`);
     await waitForOpen(device);
@@ -83,14 +95,14 @@ describe("active content per device", () => {
     expect(initial.content).toBeNull();
 
     const syncP = waitForMessage(device, (m) => m.type === "sync" && m.content?.id === contentId);
-    const res = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId } });
+    const res = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId }, headers });
     expect(res.statusCode).toBe(200);
     expect(res.json().pushedContentId).toBe(contentId);
 
     const sync = await syncP;
     expect(sync.content.judul).toBe("Halo");
 
-    const getRes = await app.inject({ method: "GET", url: `/api/devices/${deviceId}` });
+    const getRes = await app.inject({ method: "GET", url: `/api/devices/${deviceId}`, headers });
     expect(getRes.json().pushedContentId).toBe(contentId);
 
     device.close();
@@ -120,7 +132,7 @@ describe("active content per device", () => {
     };
 
     const app = await buildApp({
-      config: { HOST: "127.0.0.1", PORT: 0 } as any,
+      config: { HOST: "127.0.0.1", PORT: 0, ...AUTH } as any,
       db: null,
       events: createEventBus(),
       devicesService: devicesService as any,
@@ -129,6 +141,7 @@ describe("active content per device", () => {
     apps.push(app);
     const addr = await app.listen({ host: "127.0.0.1", port: 0 });
     const base = addr.replace("http", "ws");
+    const headers = await authHeader(app);
 
     const device = new WebSocket(`${base}/ws/device`);
     await waitForOpen(device);
@@ -136,7 +149,7 @@ describe("active content per device", () => {
     await waitForMessage(device, (m) => m.type === "sync");
 
     const syncP = waitForMessage(device, (m) => m.type === "sync" && m.content === null);
-    const res = await app.inject({ method: "DELETE", url: `/api/devices/${deviceId}/active-content` });
+    const res = await app.inject({ method: "DELETE", url: `/api/devices/${deviceId}/active-content`, headers });
     expect(res.statusCode).toBe(200);
     expect(res.json().pushedContentId).toBeNull();
     const sync = await syncP;
@@ -165,23 +178,24 @@ describe("active content per device", () => {
     const contentsService = { findById: vi.fn(async () => null) };
 
     const app = await buildApp({
-      config: { HOST: "127.0.0.1", PORT: 0 } as any,
+      config: { HOST: "127.0.0.1", PORT: 0, ...AUTH } as any,
       db: null,
       events: createEventBus(),
       devicesService: devicesService as any,
       contentsService: contentsService as any,
     } as any);
     apps.push(app);
+    const headers = await authHeader(app);
 
-    const badDevice = await app.inject({ method: "PUT", url: "/api/devices/99999999-9999-4999-8999-999999999999/active-content", payload: { contentId: "22222222-2222-4222-8222-222222222222" } });
+    const badDevice = await app.inject({ method: "PUT", url: "/api/devices/99999999-9999-4999-8999-999999999999/active-content", payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
     expect(badDevice.statusCode).toBe(404);
     expect(badDevice.json().message).toMatch(/Device/i);
 
-    const badContent = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId: "22222222-2222-4222-8222-222222222222" } });
+    const badContent = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: { contentId: "22222222-2222-4222-8222-222222222222" }, headers });
     expect(badContent.statusCode).toBe(404);
     expect(badContent.json().message).toMatch(/Content/i);
 
-    const badBody = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: {} });
+    const badBody = await app.inject({ method: "PUT", url: `/api/devices/${deviceId}/active-content`, payload: {}, headers });
     expect(badBody.statusCode).toBe(400);
   });
 });

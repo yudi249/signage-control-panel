@@ -1,9 +1,13 @@
-import Fastify from "fastify";
-import websocket from "@fastify/websocket";
-import { afterEach, describe, expect, it, vi } from "vitest";
+﻿import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { buildApp } from "./app.ts";
 import { createEventBus } from "./platform/events.ts";
+
+const AUTH = {
+  ADMIN_USERNAME: "admin",
+  ADMIN_PASSWORD_HASH: "$2b$10$Ez3iVupN5E7xvshVCt7XJuaFDAVieChUV6bafDL6prs.gVOE4i9uq", // "adminpass"
+  JWT_SECRET: "test-secret-1234567890",
+} as const;
 
 function waitForMessage(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 2000): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -29,6 +33,11 @@ function waitForOpen(ws: WebSocket): Promise<void> {
   });
 }
 
+async function getToken(app: any): Promise<string> {
+  const res = await app.inject({ method: "POST", url: "/api/auth/login", payload: { username: "admin", password: "adminpass" } });
+  return res.json().token as string;
+}
+
 describe("/ws/admin presence", () => {
   const apps: any[] = [];
   afterEach(async () => {
@@ -49,7 +58,7 @@ describe("/ws/admin presence", () => {
     };
 
     const app = await buildApp({
-      config: { HOST: "127.0.0.1", PORT: 0 } as any,
+      config: { HOST: "127.0.0.1", PORT: 0, ...AUTH } as any,
       db: null,
       events: createEventBus(),
       devicesService: devicesService as any,
@@ -57,10 +66,12 @@ describe("/ws/admin presence", () => {
     apps.push(app);
     const addr = await app.listen({ host: "127.0.0.1", port: 0 });
     const base = addr.replace("http", "ws");
+    const token = await getToken(app);
 
     const admin = new WebSocket(`${base}/ws/admin`);
-    const snapshotP = waitForMessage(admin, (m) => m.type === "snapshot");
     await waitForOpen(admin);
+    const snapshotP = waitForMessage(admin, (m) => m.type === "snapshot");
+    admin.send(JSON.stringify({ type: "auth", token }));
     const snapshot = await snapshotP;
     expect(snapshot.devices).toEqual([
       { deviceId: "11111111-1111-4111-8111-111111111111", status: "offline", lastSeen: null },

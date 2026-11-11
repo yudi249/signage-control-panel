@@ -54,3 +54,12 @@ export const adminServerMessageSchema = z.discriminatedUnion("type", [
   presenceMessageSchema,
 ]);
 export type AdminServerMessage = z.infer<typeof adminServerMessageSchema>;
+
+export const adminAuthMessageSchema = z.object({
+  type: z.literal("auth"),
+  token: z.string().min(1),
+});
+export type AdminAuthMessage = z.infer<typeof adminAuthMessageSchema>;
+
+export const adminClientMessageSchema = adminAuthMessageSchema;
+export type AdminClientMessage = z.infer<typeof adminClientMessageSchema>;
