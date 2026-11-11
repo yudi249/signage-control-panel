@@ -271,8 +271,9 @@ Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan
 penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
 Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
 halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
-Timeout connect/sync, watchdog acknowledgment, pengambilalihan koneksi, dan reset Presence
-startup mengikuti tiket lanjutan tahap 6.
+Timeout connect/sync, watchdog acknowledgment, dan pengambilalihan koneksi mengikuti
+tiket lanjutan tahap 6. Tiket 05 menerapkan reset Presence sebelum startup server
+seperti dijelaskan di bawah.
 
 - Batas backoff 1, 2, 4, 8, 16, lalu 30 detik; jeda dipilih acak antara 50–100% batas. Retry gangguan sementara tidak dibatasi jumlahnya. Penghitung di-reset setelah menerima `sync` valid, bukan saat socket terbuka.
 - Pembukaan socket dan penantian `sync` pertama masing-masing dibatasi 15 detik. Heartbeat aplikasi tetap setiap 15 detik dan mendapat acknowledgment server melalui kontrak bersama; tidak ada `sync`/ack valid selama 45 detik memicu pemulihan koneksi.
@@ -282,6 +283,7 @@ startup mengikuti tiket lanjutan tahap 6.
 - Koneksi terbaru Device mengambil alih. Koneksi lama ditutup dengan kode khusus, menghentikan tayangan/retry otomatis, dan menampilkan Hubungkan kembali. Callback socket lama tidak boleh memengaruhi registry/heartbeat socket baru.
 - Setiap `sync` baru menerapkan keadaan server terbaru dan memulai Playlist dari item pertama. Tombol retry manual, pergantian Device/token, dan unmount membersihkan percobaan lama sehingga hanya satu percobaan aktif.
 - Sebelum listen pada startup satu instance, reset status tersimpan semua Device ke Offline tanpa mengubah Last Seen. Kegagalan reset menggagalkan startup. Device yang reconnect ditandai Online kembali.
+  Jalur proses `main.ts` memanggil `startServer` di `startup.ts`: aplikasi dirakit, `devices.resetAllOffline` diselesaikan melalui repository devices, baru `listen` dijalankan. Kegagalan reset dicatat dengan konteks startup, aplikasi ditutup, dan proses berakhir gagal. Pembuatan aplikasi lewat `buildApp` untuk pengujian maupun reconnect tidak menjalankan reset. Tanpa konfigurasi database/layanan devices, tidak ada Presence tersimpan yang direset.
 - Cakupan pemulihan tahap 6 adalah Device Client dan dukungan servernya; reconnect Dashboard tidak termasuk.
 
 ## Mode kegagalan
