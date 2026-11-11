@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import type { Content, SyncMessage } from "@signage/shared";
-import { syncMessageSchema } from "@signage/shared";
+import { deviceServerMessageSchema } from "@signage/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -119,6 +119,7 @@ function DeviceClient({ id }: { id: string }) {
     let ws: WebSocket | null = null;
     let closed = false;
     let heartbeat: number | undefined;
+    let watchdog: number | undefined;
     let reconnect: number | undefined;
     let connectTimeout: number | undefined;
     let syncTimeout: number | undefined;
@@ -128,10 +129,12 @@ function DeviceClient({ id }: { id: string }) {
       window.clearInterval(heartbeat);
       window.clearTimeout(connectTimeout);
       window.clearTimeout(syncTimeout);
+      window.clearTimeout(watchdog);
       reconnect = undefined;
       heartbeat = undefined;
       connectTimeout = undefined;
       syncTimeout = undefined;
+      watchdog = undefined;
       const previous = ws;
       ws = null;
       if (previous) {
@@ -169,6 +172,13 @@ function DeviceClient({ id }: { id: string }) {
       connectTimeout = window.setTimeout(() => {
         if (isActive()) scheduleReconnect();
       }, 15000);
+      let synchronized = false;
+      const refreshWatchdog = () => {
+        window.clearTimeout(watchdog);
+        watchdog = window.setTimeout(() => {
+          if (isActive()) scheduleReconnect();
+        }, 45000);
+      };
       current.onopen = () => {
         if (!isActive()) return;
         window.clearTimeout(connectTimeout);
@@ -187,10 +197,16 @@ function DeviceClient({ id }: { id: string }) {
         if (!isActive()) return;
         try {
           const parsed = JSON.parse(String(ev.data));
-          const msg = syncMessageSchema.safeParse(parsed);
+          const msg = deviceServerMessageSchema.safeParse(parsed);
           if (msg.success) {
+            if (msg.data.type === "heartbeat_ack") {
+              if (synchronized) refreshWatchdog();
+              return;
+            }
             window.clearTimeout(syncTimeout);
             syncTimeout = undefined;
+            synchronized = true;
+            refreshWatchdog();
             attemptRef.current = 0;
             setState({ kind: "connected" });
             setPlaylistIndex(0);
