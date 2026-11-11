@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+﻿import { describe, expect, it } from "vitest";
 import {
+  adminAuthMessageSchema,
+  adminLoginRequestSchema,
+  adminLoginResponseSchema,
   presenceMessageSchema,
   snapshotMessageSchema,
 } from "./index.ts";
@@ -26,5 +29,11 @@ describe("shared ws admin schemas", () => {
     });
     expect(msg.status).toBe("offline");
     expect(msg.lastSeen).toContain("2026-11-11");
+  });
+
+  it("parses admin auth message and login contracts", () => {
+    expect(adminAuthMessageSchema.parse({ type: "auth", token: "jwt" }).type).toBe("auth");
+    expect(adminLoginRequestSchema.parse({ username: "admin", password: "secret" }).username).toBe("admin");
+    expect(adminLoginResponseSchema.parse({ token: "jwt" }).token).toBe("jwt");
   });
 });

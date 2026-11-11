@@ -1,4 +1,5 @@
 import {
+  adminClientMessageSchema,
   deviceClientMessageSchema,
   presenceMessageSchema,
   snapshotMessageSchema,
@@ -55,34 +56,61 @@ export class PresenceService {
   private readonly db: Db | null;
   private readonly devices: DevicesApi | null;
   private readonly contents: ContentsApi | null;
+  private readonly app: FastifyInstance;
 
   constructor(app: FastifyInstance, db: Db | null, devices: DevicesApi | null, contents: ContentsApi | null = null) {
     this.db = db;
     this.devices = devices;
     this.contents = contents;
-    void app;
+    this.app = app;
   }
 
   async handleAdminSocket(rawSocket: WebSocket): Promise<void> {
     const socket = toWs(rawSocket);
-    this.adminSockets.add(socket);
-    socket.on("close", () => this.adminSockets.delete(socket));
-    socket.on("error", () => this.adminSockets.delete(socket));
 
-    try {
-      const devices = this.devices ? await this.devices.list() : [];
-      const snapshot: SnapshotMessage = snapshotMessageSchema.parse({
-        type: "snapshot",
-        devices: devices.map((d) => ({
-          deviceId: d.id,
-          status: d.status,
-          lastSeen: d.lastSeen,
-        })),
-      });
-      if (socket.readyState === 1) socket.send(JSON.stringify(snapshot));
-    } catch {
-      // ignore snapshot failures
-    }
+    const onFirstMessage = async (raw: unknown) => {
+      socket.off("message", onFirstMessage);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(String(raw ?? ""));
+      } catch {
+        socket.close(1008, "Token tidak valid atau kedaluwarsa");
+        return;
+      }
+      const auth = adminClientMessageSchema.safeParse(parsed);
+      if (!auth.success) {
+        socket.close(1008, "Token tidak valid atau kedaluwarsa");
+        return;
+      }
+      try {
+        (this.app as any).jwt.verify(auth.data.token);
+      } catch {
+        socket.close(1008, "Token tidak valid atau kedaluwarsa");
+        return;
+      }
+
+      this.adminSockets.add(socket);
+      socket.on("close", () => this.adminSockets.delete(socket));
+      socket.on("error", () => this.adminSockets.delete(socket));
+
+      try {
+        const devices = this.devices ? await this.devices.list() : [];
+        const snapshot: SnapshotMessage = snapshotMessageSchema.parse({
+          type: "snapshot",
+          devices: devices.map((d) => ({
+            deviceId: d.id,
+            status: d.status,
+            lastSeen: d.lastSeen,
+          })),
+        });
+        if (socket.readyState === 1) socket.send(JSON.stringify(snapshot));
+      } catch {
+        // ignore snapshot failures
+      }
+    };
+
+    socket.on("message", onFirstMessage);
+    socket.on("close", () => socket.off("message", onFirstMessage));
   }
 
   private broadcastPresence(deviceId: string, status: "online" | "offline", lastSeen: string | null): void {

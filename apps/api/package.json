@@ -9,13 +9,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@fastify/jwt": "^10.2.7",
     "@fastify/websocket": "^11.3.7",
     "@signage/shared": "workspace:*",
     "@supabase/supabase-js": "^2.45.0",
+    "bcryptjs": "^3.0.3",
     "fastify": "^5.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
     "@types/node": "^22.9.0",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^5.1.0",
