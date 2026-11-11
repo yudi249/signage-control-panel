@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import type { Content, SyncMessage } from "@signage/shared";
-import { deviceServerMessageSchema } from "@signage/shared";
+import { DEVICE_REPLACED_CLOSE_CODE, deviceServerMessageSchema } from "@signage/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,6 +67,7 @@ type ScreenState =
   | { kind: "needs-token"; notice?: string }
   | { kind: "connecting" }
   | { kind: "connected" }
+  | { kind: "replaced" }
   | { kind: "error"; message: string; canReplaceToken: boolean };
 
 export function DeviceClientPage() {
@@ -118,6 +119,7 @@ function DeviceClient({ id }: { id: string }) {
 
     let ws: WebSocket | null = null;
     let closed = false;
+    let stopped = false;
     let heartbeat: number | undefined;
     let watchdog: number | undefined;
     let reconnect: number | undefined;
@@ -147,7 +149,7 @@ function DeviceClient({ id }: { id: string }) {
     }
 
     function scheduleReconnect() {
-      if (closed) return;
+      if (closed || stopped) return;
       const delay = Math.min(1000 * 2 ** attemptRef.current, 30000) * (0.5 + Math.random() * 0.5);
       attemptRef.current = Math.min(attemptRef.current + 1, 10);
       setState({ kind: "connecting" });
@@ -156,7 +158,7 @@ function DeviceClient({ id }: { id: string }) {
     }
 
     function connect() {
-      if (closed) return;
+      if (closed || stopped) return;
       cancelAttempt();
       setState({ kind: "connecting" });
       let current: WebSocket;
@@ -219,6 +221,14 @@ function DeviceClient({ id }: { id: string }) {
 
       current.onclose = (ev) => {
         if (!isActive()) return;
+        if (ev.code === DEVICE_REPLACED_CLOSE_CODE) {
+          stopped = true;
+          cancelAttempt();
+          setSync(undefined);
+          setPlaylistIndex(0);
+          setState({ kind: "replaced" });
+          return;
+        }
         if (ev.code === 1008) {
           closed = true;
           cancelAttempt();
@@ -236,7 +246,7 @@ function DeviceClient({ id }: { id: string }) {
       };
     }
 
-    retryNowRef.current = connect;
+    retryNowRef.current = () => { stopped = false; connect(); };
     connect();
 
     return () => {
@@ -285,6 +295,17 @@ function DeviceClient({ id }: { id: string }) {
               Simpan dan hubungkan
             </Button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.kind === "replaced") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
+        <div className="space-y-4 text-center">
+          <p>Device digunakan di tempat lain</p>
+          <Button variant="outline" onClick={() => retryNowRef.current?.()}>Hubungkan kembali</Button>
         </div>
       </div>
     );
