@@ -12,7 +12,7 @@ interface ContentsLookup {
 }
 
 interface PresenceNotifier {
-  sendSync(deviceId: string, pushedContentId: string | null): Promise<void>;
+  sendSync(deviceId: string, pushedContentId?: string | null): Promise<void>;
   disconnectDevice?(deviceId: string, reason?: string): Promise<void> | void;
 }
 
@@ -85,7 +85,7 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
     if (!content) throw notFound("Content");
     const updated = await service.setActiveContent(id, contentId);
     if (!updated) throw notFound("Device");
-    if (presenceService) await presenceService.sendSync(id, contentId);
+    if (presenceService) await presenceService.sendSync(id);
     return updated;
   });
 
@@ -95,7 +95,7 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
     if (!device) throw notFound("Device");
     const updated = await service.setActiveContent(id, null);
     if (!updated) throw notFound("Device");
-    if (presenceService) await presenceService.sendSync(id, null);
+    if (presenceService) await presenceService.sendSync(id);
     return updated;
   });
 };
