@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from "vitest";
-import { deviceClientMessageSchema, helloMessageSchema } from "./index.ts";
+import { deviceClientMessageSchema, helloMessageSchema, syncMessageSchema } from "./index.ts";
 
 describe("shared device ws schemas", () => {
   it("requires token in device hello", () => {
@@ -25,5 +25,31 @@ describe("shared device ws schemas", () => {
       token: "secret-token",
     });
     expect(msg.type).toBe("hello");
+  });
+
+  it("parses full-state sync (push/idle) with playlist array", () => {
+    const idle = syncMessageSchema.parse({
+      type: "sync",
+      mode: "idle",
+      pushed: null,
+      playlist: [],
+    });
+    expect(idle.mode).toBe("idle");
+    expect(idle.pushed).toBeNull();
+
+    const push = syncMessageSchema.parse({
+      type: "sync",
+      mode: "push",
+      pushed: {
+        id: "22222222-2222-4222-8222-222222222222",
+        judul: "Halo",
+        tipe: "text",
+        payload: "hai",
+        createdAt: "2026-11-11T10:00:00.000Z",
+      },
+      playlist: [],
+    });
+    expect(push.mode).toBe("push");
+    expect(push.pushed?.id).toBe("22222222-2222-4222-8222-222222222222");
   });
 });

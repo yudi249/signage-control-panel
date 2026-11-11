@@ -3,11 +3,12 @@ import websocket from "@fastify/websocket";
 import fastifyJwt from "@fastify/jwt";
 import { authModule, verifyAdminRequest } from "./modules/auth/index.ts";
 import { contentsModule, ContentsRepository, ContentsService } from "./modules/contents/index.ts";
+import type { ContentStorage } from "./modules/contents/index.ts";
 import { devicesModule, DevicesRepository, DevicesService } from "./modules/devices/index.ts";
-import { playlistsModule } from "./modules/playlists/index.ts";
+import { playlistsModule, PlaylistsRepository, PlaylistsService } from "./modules/playlists/index.ts";
 import { presenceModule, PresenceService } from "./modules/presence/index.ts";
 import type { Config } from "./platform/config.ts";
-import { AppError, unauthorized } from "./platform/errors.ts";
+import { AppError } from "./platform/errors.ts";
 import type { EventBus } from "./platform/events.ts";
 import type { Db } from "./platform/supabase.ts";
 
@@ -17,7 +18,9 @@ export interface BuildAppOptions {
   events: EventBus;
   devicesService?: DevicesService | null;
   contentsService?: ContentsService | null;
+  playlistsService?: PlaylistsService | null;
   presenceService?: PresenceService | null;
+  storage?: ContentStorage | null;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
@@ -66,12 +69,48 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         ? new ContentsService(new ContentsRepository(opts.db))
         : null;
 
+  const playlistsService =
+    opts.playlistsService !== undefined
+      ? opts.playlistsService
+      : opts.db && devicesService && contentsService
+        ? new PlaylistsService(new PlaylistsRepository(opts.db), devicesService, contentsService)
+        : null;
+
   const presenceService =
     opts.presenceService !== undefined
       ? opts.presenceService
       : devicesService || opts.db
-        ? new PresenceService(app, opts.db, devicesService, contentsService)
+        ? new PresenceService(app, opts.db, devicesService, contentsService, playlistsService)
         : null;
+
+  if (contentsService && typeof (contentsService as any).setDeleteIntegrity === "function") {
+    (contentsService as any).setDeleteIntegrity({
+      isReferencedInPlaylist: async (contentId: string) => {
+        if (playlistsService && typeof (playlistsService as any).isContentReferenced === "function") {
+          return (playlistsService as any).isContentReferenced(contentId);
+        }
+        return false;
+      },
+      releasePushedContent: async (contentId: string) => {
+        const pushedDevices =
+          devicesService && typeof (devicesService as any).listPushedByContent === "function"
+            ? await (devicesService as any).listPushedByContent(contentId)
+            : [];
+        const affectedIds: string[] = [];
+        for (const device of pushedDevices ?? []) {
+          if (devicesService && typeof (devicesService as any).setActiveContent === "function") {
+            await (devicesService as any).setActiveContent(device.id, null);
+          }
+          affectedIds.push(device.id);
+        }
+        return affectedIds;
+      },
+      notifyDevices: async (deviceIds: string[]) => {
+        if (!presenceService || typeof (presenceService as any).sendSync !== "function") return;
+        await Promise.all(deviceIds.map((id) => (presenceService as any).sendSync(id)));
+      },
+    });
+  }
 
   await app.register(authModule, { prefix: "/api", config: opts.config });
   await app.register(devicesModule, {
@@ -81,14 +120,31 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     contentsService,
     presenceService,
   });
-  await app.register(contentsModule, { prefix: "/api", db: opts.db, service: contentsService ?? undefined });
-  await app.register(playlistsModule, { prefix: "/api" });
+  await app.register(contentsModule, {
+    prefix: "/api",
+    db: opts.db,
+    service: contentsService ?? undefined,
+    storage: opts.storage ?? undefined,
+    bucket: opts.config.SUPABASE_STORAGE_BUCKET ?? "contents",
+    playlistsService,
+    devicesService,
+    presenceService,
+  });
+  await app.register(playlistsModule, {
+    prefix: "/api",
+    db: opts.db,
+    devicesService,
+    contentsService,
+    service: playlistsService ?? undefined,
+    presenceService,
+  });
 
   await app.register(presenceModule, {
     db: opts.db,
     events: opts.events,
     devicesService,
     contentsService,
+    playlistsService,
     service: presenceService ?? undefined,
   });
 

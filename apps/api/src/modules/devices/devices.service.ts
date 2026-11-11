@@ -52,4 +52,8 @@ export class DevicesService {
   async setActiveContent(id: string, pushedContentId: string | null): Promise<Device | null> {
     return this.repo.setActiveContent(id, pushedContentId);
   }
+
+  async listPushedByContent(contentId: string): Promise<Device[]> {
+    return this.repo.listPushedByContent(contentId);
+  }
 }
