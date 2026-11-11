@@ -21,7 +21,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   await app.register(authModule, { prefix: "/api" });
   await app.register(devicesModule, { prefix: "/api", db: opts.db });
-  await app.register(contentsModule, { prefix: "/api" });
+  await app.register(contentsModule, { prefix: "/api", db: opts.db });
   await app.register(playlistsModule, { prefix: "/api" });
   await app.register(presenceModule, { prefix: "/api" });
 
