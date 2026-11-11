@@ -1,0 +1,10 @@
+* { box-sizing: border-box; }
+body { margin: 0; padding: 48px 24px; font-family: system-ui, sans-serif; color: #132d41; background: #f4f7fa; }
+main { max-width: 680px; margin: auto; background: white; padding: 32px; border: 1px solid #d5dfe7; border-radius: 12px; }
+h1 { font-size: 24px; margin-top: 0; } h2 { font-size: 20px; }
+p { line-height: 1.6; } label { display: block; margin: 20px 0; font-weight: 600; }
+input { display: block; width: 100%; padding: 12px; margin-top: 8px; font: inherit; border: 1px solid #9caebb; border-radius: 6px; }
+button { padding: 11px 16px; font: inherit; cursor: pointer; border: 1px solid #b7c7d3; border-radius: 6px; background: #edf4fa; color: #132d41; }
+button[type=submit], #retry { background: #073f73; color: white; }
+button:disabled { opacity: .6; cursor: wait; } .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.danger { margin-top: 32px; color: #a01818; } #error { color: #a01818; } #notice { color: #435e71; }

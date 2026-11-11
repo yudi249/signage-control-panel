@@ -8,6 +8,9 @@
   },
   "scripts": {
     "dev:api": "pnpm --filter @signage/api dev",
+    "dev:desktop": "pnpm --filter @signage/desktop dev",
+    "build:desktop": "pnpm --filter @signage/desktop build",
+    "dist:desktop": "pnpm --filter @signage/desktop dist",
     "db:migrate": "node --env-file-if-exists=.env --experimental-strip-types scripts/db-migrate.ts",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint:boundaries": "depcruise apps packages --config .dependency-cruiser.cjs",

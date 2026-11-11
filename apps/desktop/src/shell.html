@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; form-action 'none'; base-uri 'none'; frame-src 'none'">
+  <title>Signage Device Client</title>
+  <link rel="stylesheet" href="shell.css">
+</head>
+<body>
+  <main>
+    <h1>Signage Device Client</h1>
+    <p id="notice" role="status"></p>
+    <section id="settings" hidden>
+      <h2>Pengaturan Device</h2>
+      <p>Buat Device di Dashboard terlebih dahulu. Token dimasukkan pada halaman Device Client setelah konfigurasi disimpan.</p>
+      <form id="form">
+        <label>Alamat web<input id="origin" type="url" placeholder="http://localhost:5173" required></label>
+        <label>ID Device<input id="deviceId" placeholder="UUID dari Dashboard" required></label>
+        <div class="actions"><button type="submit">Simpan dan buka Device</button><button id="cancel" type="button">Batal</button></div>
+      </form>
+      <button id="reset" class="danger" type="button">Hapus data pemasangan</button>
+    </section>
+    <section id="recovery" hidden>
+      <h2>Belum terhubung ke halaman web</h2>
+      <p>Aplikasi mencoba lagi otomatis setelah 10 detik. Halaman utama dibatasi waktu muat 15 detik.</p>
+      <div class="actions"><button id="retry" type="button">Coba lagi</button><button id="configure" type="button">Pengaturan</button></div>
+    </section>
+    <p id="error" role="alert"></p>
+  </main>
+  <script type="module" src="shell.js"></script>
+</body>
+</html>

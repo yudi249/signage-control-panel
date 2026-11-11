@@ -35,7 +35,7 @@ graph TD
     Web -- "WebSocket /ws/admin" --> API
 
     DeviceWeb["apps/web<br/>Halaman Device Client"] -- "WebSocket /ws/device + device token" --> API
-    Desktop["apps/desktop<br/>Electron membungkus halaman Device Client"] -. "memuat build yang sama" .-> DeviceWeb
+    Desktop["apps/desktop<br/>Electron membungkus halaman Device Client"] -. "memuat halaman dari origin web terkonfigurasi" .-> DeviceWeb
 
     subgraph Server["apps/api (satu proses Fastify, modular monolith)"]
         API["REST routes<br/>modul auth, devices, contents, playlists"]
@@ -58,7 +58,7 @@ graph TD
 ├── apps/
 │   ├── api/        Fastify: REST, WebSocket, akses Supabase (modular monolith)
 │   ├── web/        React + Vite: Dashboard dan halaman Device Client
-│   └── desktop/    Electron: membungkus halaman Device Client
+    │   └── desktop/    Electron: membungkus halaman Device Client
 └── packages/
     └── shared/     skema Zod, tipe pesan WebSocket, tipe entitas
 ```
@@ -314,6 +314,18 @@ seperti dijelaskan di bawah.
 - Sebelum listen pada startup satu instance, reset status tersimpan semua Device ke Offline tanpa mengubah Last Seen. Kegagalan reset menggagalkan startup. Device yang reconnect ditandai Online kembali.
   Jalur proses `main.ts` memanggil `startServer` di `startup.ts`: aplikasi dirakit, `devices.resetAllOffline` diselesaikan melalui repository devices, baru `listen` dijalankan. Kegagalan reset dicatat dengan konteks startup, aplikasi ditutup, dan proses berakhir gagal. Pembuatan aplikasi lewat `buildApp` untuk pengujian maupun reconnect tidak menjalankan reset. Tanpa konfigurasi database/layanan devices, tidak ada Presence tersimpan yang direset.
 - Cakupan pemulihan tahap 6 adalah Device Client dan dukungan servernya; reconnect Dashboard tidak termasuk.
+
+### Desktop Electron (tahap 7)
+
+- Pembungkus tipis memuat halaman Device Client dari origin web HTTP/HTTPS yang dikonfigurasi, tanpa membundel UI atau menjalankan server desktop tambahan. Target distribusi pertama installer Windows x64 .exe.
+- Pengaturan lokal menyimpan origin web dan UUID Device; origin tidak memuat kredensial, query, fragment, atau subpath. Token dimasukkan lewat Device Client dan tersimpan pada profil browser persisten Electron per origin, bukan file pengaturan desktop. Tidak ada login Admin pada aplikasi desktop.
+- Satu instance dan satu konfigurasi Device per komputer. Peluncuran kedua mengaktifkan jendela yang sudah ada. Konfigurasi hilang/rusak membuka pengaturan lokal dengan pesan jelas.
+- Pengaturan tampil berjendela; Device Client langsung fullscreen termasuk form token. F11 toggle, Escape keluar fullscreen, menu/Ctrl+, membuka pengaturan. Simpan mengganti Device; batal kembali ke pasangan sebelumnya. Hapus data pemasangan dengan konfirmasi menghapus konfigurasi serta data situs/token.
+- Gagal load halaman utama atau timeout 15 detik membuka pemulihan lokal dengan Coba lagi/Pengaturan serta retry otomatis 10 detik tanpa tumpang tindih. Perubahan konfigurasi dan quit membatalkan load/retry lama. Setelah halaman dimuat, gangguan API/WS memakai pemulihan tahap 6 tanpa reload desktop.
+- Halaman remote tidak mendapat Node.js/IPC desktop; context isolation dan sandbox aktif. Navigasi utama hanya ke halaman Device Client terkonfigurasi dan popup ditolak. Media/iframe eksternal tetap dapat ditampilkan tanpa hak desktop. Error sertifikat tidak dilewati otomatis.
+- Video desktop diizinkan autoplay dengan audio mengikuti volume Windows. X/Alt+F4 menutup aplikasi sepenuhnya; konfigurasi/token bertahan. Tray, autostart, auto-update, code signing, multimonitor, dan target macOS/Linux tidak termasuk tahap ini.
+
+Perintah dev, packaging, pengujian, dan pemasangan dijelaskan pada [panduan desktop](./desktop.md). Installer dihasilkan melalui `pnpm dist:desktop`; server web/API tetap dijalankan terpisah.
 
 ## Mode kegagalan
 
