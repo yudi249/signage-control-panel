@@ -45,6 +45,10 @@ export class DevicesService {
     if (!deleted) throw notFound("Device");
   }
 
+  resetAllOffline(): Promise<void> {
+    return this.repo.resetAllOffline();
+  }
+
   async setPresence(id: string, status: "online" | "offline"): Promise<Device | null> {
     return this.repo.setPresence(id, status);
   }

@@ -1,4 +1,4 @@
-import { buildApp } from "./app.ts";
+import { startServer } from "./startup.ts";
 import { loadConfig } from "./platform/config.ts";
 import { createEventBus } from "./platform/events.ts";
 import { createDb } from "./platform/supabase.ts";
@@ -14,9 +14,7 @@ async function main(): Promise<void> {
         })
       : null;
 
-  const app = await buildApp({ config, db, events });
-  const address = await app.listen({ host: config.HOST, port: config.PORT });
-  app.log.info({ address, supabase: db !== null }, "api listening");
+  await startServer({ config, db, events });
 }
 
 main().catch((error) => {

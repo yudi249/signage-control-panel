@@ -1,6 +1,8 @@
 import {
+  DEVICE_REPLACED_CLOSE_CODE,
   adminClientMessageSchema,
   deviceClientMessageSchema,
+  heartbeatAckMessageSchema,
   presenceMessageSchema,
   snapshotMessageSchema,
   syncMessageSchema,
@@ -55,29 +57,40 @@ interface ContentRow {
 interface Connection {
   socket: WebSocket;
   timeout: NodeJS.Timeout;
+  order: number;
+  syncRevision: number;
+  presenceReady: boolean;
+}
+
+interface PresenceDependencies {
+  verifyAdminToken(token: string): unknown;
+  reportFailure(error: unknown, deviceId: string, status: "online" | "offline"): void;
 }
 
 export class PresenceService {
   private readonly connections = new Map<string, Connection>();
   private readonly adminSockets = new Set<WebSocket>();
+  private nextOrder = 0;
+  private readonly latestOrders = new Map<string, number>();
+  private readonly presenceWrites = new Map<string, Promise<void>>();
   private readonly db: Db | null;
   private readonly devices: DevicesApi | null;
   private readonly contents: ContentsApi | null;
   private readonly playlists: PlaylistsApi | null;
-  private readonly app: any;
+  private readonly dependencies: PresenceDependencies;
 
   constructor(
-    app: any,
+    dependencies: PresenceDependencies,
     db: Db | null,
     devices: DevicesApi | null,
     contents: ContentsApi | null = null,
     playlists: PlaylistsApi | null = null,
   ) {
     this.db = db;
+    this.dependencies = dependencies;
     this.devices = devices;
     this.contents = contents;
     this.playlists = playlists;
-    this.app = app;
   }
 
   async handleAdminSocket(rawSocket: WebSocket): Promise<void> {
@@ -98,7 +111,7 @@ export class PresenceService {
         return;
       }
       try {
-        (this.app as any).jwt.verify(auth.data.token);
+        this.dependencies.verifyAdminToken(auth.data.token);
       } catch {
         socket.close(1008, "Token tidak valid atau kedaluwarsa");
         return;
@@ -143,65 +156,77 @@ export class PresenceService {
 
   async handleDeviceSocket(rawSocket: WebSocket): Promise<void> {
     const socket = toWs(rawSocket);
-    let deviceId: string | null = null;
+    const order = ++this.nextOrder;
+    let alive = true;
+    let connection: Connection | undefined;
+    let deviceId: string | undefined;
+    const finish = () => {
+      alive = false;
+      socket.off("message", onFirstMessage);
+      if (deviceId && connection) void this.onClose(deviceId, connection);
+    };
+    socket.on("close", finish);
+    socket.on("error", finish);
 
     const onFirstMessage = async (raw: unknown) => {
-      const text = String(raw ?? "");
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(text);
-      } catch {
-        socket.close(1008, "Format pesan tidak valid");
-        return;
-      }
-      const msg = deviceClientMessageSchema.safeParse(parsed);
-      if (!msg.success || msg.data.type !== "hello") {
-        socket.close(1008, "Pesan hello tidak valid");
-        return;
-      }
-      if (!this.devices) {
-        socket.close(1011, "Database not configured");
-        return;
-      }
-      const device = await this.devices.findById(msg.data.deviceId);
-      if (!device) {
-        socket.close(1008, "Device tidak terdaftar");
-        return;
-      }
-      const token = (msg.data as any).token as string | undefined;
-      if (!token) {
-        socket.close(1008, "Token perangkat tidak valid");
-        return;
-      }
-      const expectedHash = device.tokenHash ?? "";
-      const providedHash = createHash("sha256").update(token).digest("hex");
-      let ok = false;
-      try {
-        ok = !!expectedHash && expectedHash.length === providedHash.length &&
-          timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(providedHash, "hex"));
-      } catch {
-        ok = false;
-      }
-      if (!ok) {
-        socket.close(1008, "Token perangkat tidak valid");
-        return;
-      }
-      deviceId = device.id;
-      this.register(deviceId, socket);
-      const updated = await this.devices.setPresence(deviceId, "online");
-      this.broadcastPresence(deviceId, "online", updated?.lastSeen ?? new Date().toISOString());
-      await this.sendSync(deviceId);
-
       socket.off("message", onFirstMessage);
-      socket.on("message", (data) => void this.onMessage(deviceId!, data));
-      socket.on("close", () => void this.onClose(deviceId!));
-      socket.on("error", () => void this.onClose(deviceId!));
+      try {
+        const text = String(raw ?? "");
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          socket.close(1008, "Format pesan tidak valid");
+          return;
+        }
+        const msg = deviceClientMessageSchema.safeParse(parsed);
+        if (!msg.success || msg.data.type !== "hello") {
+          socket.close(1008, "Pesan hello tidak valid");
+          return;
+        }
+        if (!this.devices) {
+          socket.close(1011, "Database not configured");
+          return;
+        }
+        const device = await this.devices.findById(msg.data.deviceId);
+        if (!alive || socket.readyState !== 1) return;
+        if (!device) {
+          socket.close(1008, "Device tidak terdaftar");
+          return;
+        }
+        const token = msg.data.token;
+        const expectedHash = device.tokenHash ?? "";
+        const providedHash = createHash("sha256").update(token).digest("hex");
+        let ok = false;
+        try {
+          ok = !!expectedHash && expectedHash.length === providedHash.length &&
+            timingSafeEqual(Buffer.from(expectedHash, "hex"), Buffer.from(providedHash, "hex"));
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          socket.close(1008, "Token perangkat tidak valid");
+          return;
+        }
+        deviceId = device.id;
+        if ((this.latestOrders.get(deviceId) ?? 0) > order) {
+          socket.close(DEVICE_REPLACED_CLOSE_CODE, "Device digunakan di tempat lain");
+          return;
+        }
+        connection = this.register(deviceId, socket, order);
+        socket.on("message", (data) => void this.onMessage(deviceId!, connection!, data));
+        await this.writePresence(deviceId, connection, "online");
+        connection.presenceReady = true;
+        if (this.connections.get(deviceId) === connection) await this.sendSync(deviceId);
+      } catch {
+        if (alive && (!connection || this.connections.get(deviceId!) === connection)) {
+          socket.close(1011, "Sinkronisasi Device gagal");
+          finish();
+        }
+      }
     };
 
     socket.on("message", onFirstMessage);
-    socket.on("close", () => {
-      socket.off("message", onFirstMessage);
-    });
   }
 
   async disconnectDevice(deviceId: string, reason = "Koneksi diputus"): Promise<void> {
@@ -212,24 +237,27 @@ export class PresenceService {
     } catch {
       // ignore
     }
-    await this.onClose(deviceId);
+    await this.onClose(deviceId, conn);
   }
 
-  private register(deviceId: string, socket: WebSocket): void {
+  private register(deviceId: string, socket: WebSocket, order: number): Connection {
     const existing = this.connections.get(deviceId);
     if (existing) {
       clearTimeout(existing.timeout);
       try {
-        existing.socket.close(1000, "Replaced");
+        existing.socket.close(DEVICE_REPLACED_CLOSE_CODE, "Device digunakan di tempat lain");
       } catch {
         // ignore
       }
     }
-    const timeout = setTimeout(() => void this.onTimeout(deviceId), HEARTBEAT_TIMEOUT_MS);
-    this.connections.set(deviceId, { socket, timeout });
+    const conn: Connection = { socket, order, syncRevision: 0, presenceReady: false, timeout: setTimeout(() => void this.onTimeout(deviceId, conn), HEARTBEAT_TIMEOUT_MS) };
+    this.connections.set(deviceId, conn);
+    this.latestOrders.set(deviceId, order);
+    return conn;
   }
 
-  private async onMessage(deviceId: string, raw: unknown): Promise<void> {
+  private async onMessage(deviceId: string, conn: Connection, raw: unknown): Promise<void> {
+    if (this.connections.get(deviceId) !== conn || !conn.presenceReady || conn.socket.readyState !== 1) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(String(raw ?? ""));
@@ -239,36 +267,46 @@ export class PresenceService {
     const msg = deviceClientMessageSchema.safeParse(parsed);
     if (!msg.success) return;
     if (msg.data.type === "heartbeat") {
-      const conn = this.connections.get(deviceId);
-      if (!conn) return;
       clearTimeout(conn.timeout);
-      conn.timeout = setTimeout(() => void this.onTimeout(deviceId), HEARTBEAT_TIMEOUT_MS);
+      conn.timeout = setTimeout(() => void this.onTimeout(deviceId, conn), HEARTBEAT_TIMEOUT_MS);
+      conn.socket.send(JSON.stringify(heartbeatAckMessageSchema.parse({ type: "heartbeat_ack" })));
     }
   }
 
-  private async onTimeout(deviceId: string): Promise<void> {
-    const conn = this.connections.get(deviceId);
-    if (!conn) return;
+  private async onTimeout(deviceId: string, conn: Connection): Promise<void> {
+    if (this.connections.get(deviceId) !== conn) return;
     try {
       conn.socket.close(1000, "Heartbeat timeout");
     } catch {
       // ignore
     }
-    await this.onClose(deviceId);
+    await this.onClose(deviceId, conn);
   }
 
-  private async onClose(deviceId: string): Promise<void> {
-    const conn = this.connections.get(deviceId);
-    if (!conn) return;
+  private async onClose(deviceId: string, conn: Connection): Promise<void> {
+    if (this.connections.get(deviceId) !== conn) return;
     clearTimeout(conn.timeout);
     if (this.connections.get(deviceId)?.socket === conn.socket) {
       this.connections.delete(deviceId);
-      let lastSeen: string | null = null;
-      if (this.devices) {
-        const updated = await this.devices.setPresence(deviceId, "offline");
-        lastSeen = updated?.lastSeen ?? null;
-      }
-      this.broadcastPresence(deviceId, "offline", lastSeen);
+      await this.writePresence(deviceId, conn, "offline");
+    }
+  }
+
+  private async writePresence(deviceId: string, conn: Connection, status: "online" | "offline"): Promise<void> {
+    const current = () => status === "online"
+      ? this.connections.get(deviceId) === conn
+      : !this.connections.has(deviceId) && this.latestOrders.get(deviceId) === conn.order;
+    const write = (this.presenceWrites.get(deviceId) ?? Promise.resolve()).catch(() => {}).then(async () => {
+      if (!current()) return;
+      const updated = await this.devices?.setPresence(deviceId, status);
+      if (current()) this.broadcastPresence(deviceId, status, updated?.lastSeen ?? null);
+    });
+    this.presenceWrites.set(deviceId, write);
+    try { await write; } catch (error) {
+      this.dependencies.reportFailure(error, deviceId, status);
+      if (status === "online") throw error;
+    } finally {
+      if (this.presenceWrites.get(deviceId) === write) this.presenceWrites.delete(deviceId);
     }
   }
 
@@ -346,7 +384,8 @@ export class PresenceService {
 
   async sendSync(deviceId: string, pushedContentId?: string | null): Promise<void> {
     const conn = this.connections.get(deviceId);
-    if (!conn || conn.socket.readyState !== 1) return;
+    if (!conn || !conn.presenceReady || conn.socket.readyState !== 1) return;
+    const revision = ++conn.syncRevision;
     let pushedId = pushedContentId;
     if (pushedId === undefined) {
       const device = this.devices ? await this.devices.findById(deviceId) : null;
@@ -355,7 +394,9 @@ export class PresenceService {
     const pushed = await this.resolveContent(pushedId ?? null);
     const playlist = await this.resolvePlaylist(deviceId);
     const msg = this.buildSync(pushed, playlist);
-    conn.socket.send(JSON.stringify(msg));
+    if (this.connections.get(deviceId) === conn && conn.syncRevision === revision && conn.socket.readyState === 1) {
+      conn.socket.send(JSON.stringify(msg));
+    }
   }
 
   isOnline(deviceId: string): boolean {

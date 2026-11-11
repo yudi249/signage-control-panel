@@ -129,6 +129,14 @@ export class DevicesRepository {
     return data !== null;
   }
 
+  async resetAllOffline(): Promise<void> {
+    const { error } = await this.db
+      .from("devices")
+      .update({ status: "offline" })
+      .in("status", ["online", "offline"]);
+    if (error) throw new Error(error.message);
+  }
+
   async setPresence(id: string, status: "online" | "offline"): Promise<Device | null> {
     const { data, error } = await this.db
       .from("devices")

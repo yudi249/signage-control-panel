@@ -38,7 +38,15 @@ export const deviceClientMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type DeviceClientMessage = z.infer<typeof deviceClientMessageSchema>;
 
-export const deviceServerMessageSchema = syncMessageSchema;
+export const heartbeatAckMessageSchema = z.object({
+  type: z.literal("heartbeat_ack"),
+}).strict();
+export type HeartbeatAckMessage = z.infer<typeof heartbeatAckMessageSchema>;
+
+export const deviceServerMessageSchema = z.discriminatedUnion("type", [
+  syncMessageSchema,
+  heartbeatAckMessageSchema,
+]);
 export type DeviceServerMessage = z.infer<typeof deviceServerMessageSchema>;
 
 export const presenceSnapshotItemSchema = z.object({
@@ -81,3 +89,6 @@ export const pushRequestSchema = z.object({
   contentId: z.string().uuid(),
 });
 export type PushRequest = z.infer<typeof pushRequestSchema>;
+
+/** Koneksi Device sah yang lebih baru telah mengambil alih. */
+export const DEVICE_REPLACED_CLOSE_CODE = 4009;

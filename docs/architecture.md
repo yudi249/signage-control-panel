@@ -107,6 +107,7 @@ modules/devices/
 
 - **Route** hanya memvalidasi input dengan skema `packages/shared`, memanggil service, dan memetakan hasil ke HTTP. Tidak ada aturan bisnis.
 - **Service** memegang aturan bisnis dan tidak tahu tentang Fastify. Service menerima repository lewat konstruktor sehingga bisa diuji dengan repository palsu.
+- Presence menerima fungsi verifikasi token Admin dan pelapor kegagalan yang sempit; adapter composition root/modul menghubungkannya ke JWT dan logger Fastify. `composition.ts` menyediakan satu jalur perakitan DevicesService yang dipakai `app.ts` dan `startup.ts`.
 - **Repository** hanya membungkus akses Supabase dan mengembalikan tipe dari `packages/shared`. Tidak ada logika, dan tidak dibuat generik.
 - Lapisan hanya boleh menunjuk ke bawah: route ke service ke repository. Repository tidak pernah diimpor dari luar modulnya.
 
@@ -212,13 +213,32 @@ Dua endpoint dengan peran berbeda. Semua pesan berupa JSON `{ type, ...data }` d
 
 ### `/ws/device` (Device Client)
 
-Autentikasi: device token dikirim saat handshake. Token tak dikenal ditolak sebelum koneksi dibuka.
+Autentikasi: setelah WebSocket terbuka, pesan pertama harus `hello` berisi `deviceId` dan `token`. Token tidak dikirim melalui URL. Identitas/token tidak sah ditolak dengan close `1008`; satu socket hanya memproses satu handshake, termasuk selama autentikasi async.
+
+Koneksi sah terbaru mengambil alih Device yang sama. Koneksi lama ditutup dengan kode aplikasi `4009` (`DEVICE_REPLACED_CLOSE_CODE` dari `packages/shared`), berbeda dari penolakan akses `1008` dan gangguan sementara `1011`. Urutan pembukaan socket menentukan koneksi terbaru meskipun autentikasi lama selesai belakangan.
+
+Registry mengikat message, close, error, heartbeat, timeout, dan hasil async ke identitas koneksi. Hasil sync lama hanya boleh dikirim ke socket asal yang masih aktif. Penulisan Presence diurutkan per Device, diperiksa sebelum operasi dan sebelum siaran; penulisan yang sudah berjalan diselesaikan sebelum Presence pengganti ditulis, sehingga hasil akhirnya tetap mengikuti koneksi terbaru.
+
+Setiap permintaan sync pada koneksi yang sama membatalkan hak kirim permintaan sebelumnya: hasil pembacaan Device, Content, atau Playlist yang selesai terlambat tidak boleh menimpa sync lebih baru. Koneksi baru hanya boleh mengirim sync dan menerima acknowledgment setelah penulisan Online berhasil. Kegagalan penulisan Online dilaporkan melalui fungsi pelapor, menutup socket dengan `1011`, dan membersihkan registry/timer agar retry dapat memulihkan Presence.
 
 | Arah | Pesan | Isi |
 | --- | --- | --- |
 | Server ke Device | `sync` | Keadaan lengkap: Content yang di-push, atau Playlist. Dikirim saat tersambung dan tiap ada perubahan |
 | Server ke Device | `push` / `release` | Perintah seketika |
 | Device ke Server | `heartbeat` | Setiap 15 detik |
+| Server ke Device | `heartbeat_ack` | `{ type: "heartbeat_ack" }`, hanya membalas heartbeat Device terautentikasi pada socket yang masih aktif |
+
+`deviceServerMessageSchema` adalah discriminated union `sync` dan `heartbeat_ack`;
+`heartbeatAckMessageSchema` menolak properti tambahan. Device Client memvalidasi pesan
+sebelum menggunakannya. Setelah `sync` pertama pada setiap percobaan, `sync` atau
+`heartbeat_ack` valid memperbarui watchdog 45 detik. Ack tidak mengubah tayangan,
+posisi/durasi Playlist, status sinkronisasi, atau penghitung backoff. Pesan malformed
+dan callback socket lama tidak memperpanjang watchdog. Timeout memakai jalur retry
+berjitter yang sama dengan gangguan jaringan dan mempertahankan tayangan terakhir.
+Heartbeat dan watchdog dibersihkan ketika percobaan berakhir, retry manual,
+pergantian Device/token, atau unmount.
+
+Setiap sync valid memberi identitas playback baru dan memulai Playlist dari item pertama. Setiap transisi Playlist juga memberi identitas playback baru, termasuk Content duplikat dan putaran Playlist satu item. Elemen media dipasang ulang sehingga video mulai dari awal walaupun URL sama. Ack, rerender biasa, dan gangguan sementara mempertahankan elemen media serta playback yang sedang berjalan.
 
 ### `/ws/admin` (Dashboard)
 
@@ -247,6 +267,7 @@ sequenceDiagram
     S-->>D: sync (Playlist atau Content yang di-push)
     loop tiap 15 dtk
         D->>S: heartbeat
+        S-->>D: heartbeat_ack
         Note over S: reset timer 45 dtk,<br/>last_seen ke DB maks 1x/menit
     end
     Note over D,S: koneksi putus atau heartbeat berhenti
@@ -264,6 +285,35 @@ sequenceDiagram
 ### Reconnection Device Client
 
 Saat koneksi putus, Device Client mencoba lagi dengan exponential backoff (1 dtk, 2, 4, 8, hingga 30 dtk, ditambah jitter) dan tetap menampilkan Content terakhir selama putus. Setelah tersambung ulang, ia menerima `sync` dan menyamakan tampilannya. Karena `sync` selalu berisi keadaan penuh, bukan selisih, tidak ada pesan yang perlu diputar ulang.
+
+Keputusan desain tahap 6 berikut adalah target implementasi hasil pembahasan:
+
+Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan manual,
+penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
+Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
+halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
+Tiket 02 menerapkan timeout connect dan sync pertama, masing-masing 15 detik:
+open membatalkan timeout connect dan memulai timeout sync; hanya sync valid
+membatalkan penantian sync. Timeout membersihkan percobaan lalu memakai backoff
+yang sama, sambil mempertahankan Content/Playlist. Retry manual, pergantian
+Device/token, dan unmount membersihkan kedua timeout; callback percobaan lama
+diabaikan. Tes halaman mencakup batas waktu, keberhasilan sebelum batas,
+pembatalan, callback usang, dan kelanjutan playback selama timeout/retry.
+Tiket 03 menerapkan acknowledgment heartbeat dan watchdog halaman 45 detik.
+Tiket 04 menerapkan pengambilalihan koneksi dengan close `4009`, penghentian terminal
+dan pemulihan manual. Tiket 05 menerapkan reset Presence sebelum startup server
+seperti dijelaskan di bawah.
+
+- Batas backoff 1, 2, 4, 8, 16, lalu 30 detik; jeda dipilih acak antara 50–100% batas. Retry gangguan sementara tidak dibatasi jumlahnya. Penghitung di-reset setelah menerima `sync` valid, bukan saat socket terbuka.
+- Pembukaan socket dan penantian `sync` pertama masing-masing dibatasi 15 detik. Heartbeat aplikasi tetap setiap 15 detik dan mendapat acknowledgment server melalui kontrak bersama; tidak ada `sync`/ack valid selama 45 detik memicu pemulihan koneksi.
+- Selama gangguan sementara (termasuk close 1011), Content terakhir tetap tampil dan Playlist terus berputar. Indikator kecil menyediakan tombol Coba sekarang. Sebelum `sync` pertama, tampilkan Menghubungkan.
+- Keadaan tayangan hanya dipertahankan di memori selama halaman terbuka. Tidak ada jaminan pemulihan setelah refresh offline atau caching media; gambar, video, dan URL tetap bergantung pada jaringan/cache browser.
+- Penolakan identitas/token (1008) menghentikan retry dan tayangan, lalu menampilkan pesan serta tindakan Ganti token.
+- Koneksi terbaru Device yang terautentikasi mengambil alih. Koneksi lama ditutup dengan `4009`, menghentikan tayangan/heartbeat/retry otomatis dan timer, lalu menampilkan Device digunakan di tempat lain serta Hubungkan kembali. Tombol itu memulai satu percobaan memakai token tersimpan; token diverifikasi ulang, dan penolakan `1008` masuk ke Ganti token. Callback socket lama tidak boleh memengaruhi registry/heartbeat socket baru. Tidak ada perebutan ulang otomatis antar halaman.
+- Setiap `sync` baru menerapkan keadaan server terbaru dan memulai Playlist dari item pertama. Tombol retry manual, pergantian Device/token, dan unmount membersihkan percobaan lama sehingga hanya satu percobaan aktif.
+- Sebelum listen pada startup satu instance, reset status tersimpan semua Device ke Offline tanpa mengubah Last Seen. Kegagalan reset menggagalkan startup. Device yang reconnect ditandai Online kembali.
+  Jalur proses `main.ts` memanggil `startServer` di `startup.ts`: aplikasi dirakit, `devices.resetAllOffline` diselesaikan melalui repository devices, baru `listen` dijalankan. Kegagalan reset dicatat dengan konteks startup, aplikasi ditutup, dan proses berakhir gagal. Pembuatan aplikasi lewat `buildApp` untuk pengujian maupun reconnect tidak menjalankan reset. Tanpa konfigurasi database/layanan devices, tidak ada Presence tersimpan yang direset.
+- Cakupan pemulihan tahap 6 adalah Device Client dan dukungan servernya; reconnect Dashboard tidak termasuk.
 
 ## Mode kegagalan
 

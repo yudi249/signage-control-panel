@@ -1,7 +1,14 @@
 ﻿import { describe, expect, it } from "vitest";
-import { deviceClientMessageSchema, helloMessageSchema, syncMessageSchema } from "./index.ts";
+import { deviceClientMessageSchema, deviceServerMessageSchema, helloMessageSchema, syncMessageSchema } from "./index.ts";
 
 describe("shared device ws schemas", () => {
+  it("membedakan heartbeat_ack dari sync dan menolak pesan server malformed", () => {
+    expect(deviceServerMessageSchema.parse({ type: "heartbeat_ack" })).toEqual({ type: "heartbeat_ack" });
+    expect(deviceServerMessageSchema.parse({ type: "sync", mode: "idle", pushed: null, playlist: [] }).type).toBe("sync");
+    for (const message of [{}, { type: "heartbeat" }, { type: "heartbeat_ack", mode: "idle" }, { type: "sync" }]) {
+      expect(deviceServerMessageSchema.safeParse(message).success).toBe(false);
+    }
+  });
   it("requires token in device hello", () => {
     const msg = helloMessageSchema.parse({
       type: "hello",
