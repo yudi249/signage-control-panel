@@ -41,4 +41,8 @@ export class DevicesService {
   async setPresence(id: string, status: "online" | "offline"): Promise<Device | null> {
     return this.repo.setPresence(id, status);
   }
+
+  async setActiveContent(id: string, pushedContentId: string | null): Promise<Device | null> {
+    return this.repo.setActiveContent(id, pushedContentId);
+  }
 }

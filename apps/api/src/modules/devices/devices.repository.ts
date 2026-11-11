@@ -99,4 +99,15 @@ export class DevicesRepository {
     if (error) throw new Error(error.message);
     return data ? toDevice(data as Omit<DeviceRow, "token_hash">) : null;
   }
+
+  async setActiveContent(id: string, pushedContentId: string | null): Promise<Device | null> {
+    const { data, error } = await this.db
+      .from("devices")
+      .update({ pushed_content_id: pushedContentId })
+      .eq("id", id)
+      .select(DEVICE_COLUMNS)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? toDevice(data as Omit<DeviceRow, "token_hash">) : null;
+  }
 }

@@ -7,7 +7,7 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { AdminServerMessage, CreateDevice, Device, UpdateDevice } from "@signage/shared";
+import type { AdminServerMessage, Content, CreateDevice, Device, UpdateDevice } from "@signage/shared";
 import { adminServerMessageSchema } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -38,10 +38,17 @@ export function DevicesPage() {
   const [editing, setEditing] = useState<Device | null>(null);
   const [deleting, setDeleting] = useState<Device | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeContentError, setActiveContentError] = useState<string | null>(null);
+  const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
     queryFn: () => api.get<Device[]>("/api/devices"),
+  });
+
+  const contentsQuery = useQuery({
+    queryKey: ["contents"],
+    queryFn: () => api.get<Content[]>("/api/contents"),
   });
 
   useEffect(() => {
@@ -105,6 +112,32 @@ export function DevicesPage() {
     onError: (err) => setActionError(errorMessage(err)),
   });
 
+  const setActiveContentMutation = useMutation({
+    mutationFn: async ({ deviceId, contentId }: { deviceId: string; contentId: string }) => {
+      setPendingDeviceId(deviceId);
+      return api.put<Device>(`/api/devices/${deviceId}/active-content`, { contentId });
+    },
+    onSuccess: async () => {
+      setActiveContentError(null);
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (err) => setActiveContentError(errorMessage(err)),
+    onSettled: () => setPendingDeviceId(null),
+  });
+
+  const clearActiveContentMutation = useMutation({
+    mutationFn: async (deviceId: string) => {
+      setPendingDeviceId(deviceId);
+      return api.delete<Device>(`/api/devices/${deviceId}/active-content`);
+    },
+    onSuccess: async () => {
+      setActiveContentError(null);
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (err) => setActiveContentError(errorMessage(err)),
+    onSettled: () => setPendingDeviceId(null),
+  });
+
   const form = useForm({
     defaultValues: { nama: editing?.nama ?? "", lokasi: editing?.lokasi ?? "" },
     onSubmit: async ({ value }) => {
@@ -149,6 +182,47 @@ export function DevicesPage() {
           return v ? new Date(v).toLocaleString() : "-";
         },
       }),
+      columnHelper.accessor("pushedContentId", {
+        header: "Konten aktif",
+        cell: ({ row }) => {
+          const device = row.original;
+          const busy = pendingDeviceId === device.id;
+          const contents = contentsQuery.data ?? [];
+          return (
+            <div className="flex items-center gap-2">
+              <select
+                className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                value={device.pushedContentId ?? ""}
+                disabled={busy || contentsQuery.isLoading}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setActiveContentError(null);
+                  if (!value) return;
+                  setActiveContentMutation.mutate({ deviceId: device.id, contentId: value });
+                }}
+              >
+                <option value="">(tidak ada)</option>
+                {contents.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.judul}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !device.pushedContentId}
+                onClick={() => {
+                  setActiveContentError(null);
+                  clearActiveContentMutation.mutate(device.id);
+                }}
+              >
+                Kosongkan
+              </Button>
+            </div>
+          );
+        },
+      }),
       columnHelper.display({
         id: "actions",
         header: "Aksi",
@@ -171,7 +245,7 @@ export function DevicesPage() {
         ),
       }),
     ],
-    [],
+    [clearActiveContentMutation, contentsQuery.data, contentsQuery.isLoading, pendingDeviceId, setActiveContentMutation],
   );
 
   const table = useReactTable({
@@ -192,6 +266,7 @@ export function DevicesPage() {
           {devicesQuery.isError && (
             <p className="text-sm text-destructive">{errorMessage(devicesQuery.error)}</p>
           )}
+          {activeContentError && <p className="mb-2 text-sm text-destructive">{activeContentError}</p>}
           {devicesQuery.isSuccess && (
             <Table>
               <TableHeader>
@@ -208,7 +283,7 @@ export function DevicesPage() {
               <TableBody>
                 {table.getRowModel().rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
                       Belum ada device.
                     </TableCell>
                   </TableRow>

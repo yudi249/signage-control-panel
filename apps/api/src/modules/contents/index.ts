@@ -6,17 +6,17 @@ import { ContentsService } from "./contents.service.ts";
 
 export interface ContentsModuleOptions {
   db: SupabaseClient | null;
+  service?: ContentsService;
 }
 
 export const contentsModule: FastifyPluginAsync<ContentsModuleOptions> = async (app, opts) => {
-  if (!opts.db) {
+  const service = opts.service ?? (opts.db ? new ContentsService(new ContentsRepository(opts.db)) : null);
+  if (!service) {
     app.all("/contents*", async (_req, reply) =>
       reply.status(503).send({ message: "Database belum dikonfigurasi (SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY)" }),
     );
     return;
   }
-  const repo = new ContentsRepository(opts.db);
-  const service = new ContentsService(repo);
   await app.register(contentsRoutes, { service });
 };
 
