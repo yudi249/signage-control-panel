@@ -1,11 +1,11 @@
-﻿import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { buildApp } from "./app.ts";
 import { createEventBus } from "./platform/events.ts";
 
 const AUTH = {
   ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD_HASH: "713bfda78870bf9d1b261f565286f85e97ee614efe5f0faf7c34e7ca4f65baca", // "adminpass"
+  ADMIN_PASSWORD_HASH: "$2b$04$WX0Y.QWBAln/wMErhaciGeZKl6h2bkMQ9d769anlyGUNto1lsWQYe", // "adminpass"
   JWT_SECRET: "test-secret-1234567890",
 } as const;
 
