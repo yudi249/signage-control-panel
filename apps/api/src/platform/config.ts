@@ -5,6 +5,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().min(1).optional(),
+  SUPABASE_STORAGE_BUCKET: z.string().min(1).default("contents"),
   ADMIN_USERNAME: z.string().min(1).optional(),
   ADMIN_PASSWORD_HASH: z.string().min(1).optional(),
   JWT_SECRET: z.string().min(1).optional(),

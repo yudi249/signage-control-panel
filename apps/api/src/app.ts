@@ -3,6 +3,7 @@ import websocket from "@fastify/websocket";
 import fastifyJwt from "@fastify/jwt";
 import { authModule, verifyAdminRequest } from "./modules/auth/index.ts";
 import { contentsModule, ContentsRepository, ContentsService } from "./modules/contents/index.ts";
+import type { ContentStorage } from "./modules/contents/index.ts";
 import { devicesModule, DevicesRepository, DevicesService } from "./modules/devices/index.ts";
 import { playlistsModule, PlaylistsRepository, PlaylistsService } from "./modules/playlists/index.ts";
 import { presenceModule, PresenceService } from "./modules/presence/index.ts";
@@ -19,6 +20,7 @@ export interface BuildAppOptions {
   contentsService?: ContentsService | null;
   playlistsService?: PlaylistsService | null;
   presenceService?: PresenceService | null;
+  storage?: ContentStorage | null;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
@@ -89,7 +91,13 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     contentsService,
     presenceService,
   });
-  await app.register(contentsModule, { prefix: "/api", db: opts.db, service: contentsService ?? undefined });
+  await app.register(contentsModule, {
+    prefix: "/api",
+    db: opts.db,
+    service: contentsService ?? undefined,
+    storage: opts.storage ?? undefined,
+    bucket: opts.config.SUPABASE_STORAGE_BUCKET ?? "contents",
+  });
   await app.register(playlistsModule, {
     prefix: "/api",
     db: opts.db,

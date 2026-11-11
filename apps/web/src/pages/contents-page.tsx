@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import {
@@ -8,6 +8,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import type { Content, ContentType, CreateContent, UpdateContent } from "@signage/shared";
+import { ALLOWED_UPLOAD_MIME_TYPES, MAX_UPLOAD_SIZE_BYTES } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -43,6 +44,10 @@ export function ContentsPage() {
   const [editing, setEditing] = useState<Content | null>(null);
   const [deleting, setDeleting] = useState<Content | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [uploadJudul, setUploadJudul] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const contentsQuery = useQuery({
     queryKey: ["contents"],
@@ -73,6 +78,23 @@ export function ContentsPage() {
     onError: (err) => setActionError(errorMessage(err)),
   });
 
+  const uploadMutation = useMutation({
+    mutationFn: async ({ judul, file }: { judul: string; file: File }) => {
+      const form = new FormData();
+      form.append("judul", judul);
+      form.append("file", file);
+      return api.postForm<Content>("/api/contents/upload", form);
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["contents"] });
+      setUploadJudul("");
+      setUploadFile(null);
+      setUploadError(null);
+      if (uploadInputRef.current) uploadInputRef.current.value = "";
+    },
+    onError: (err) => setUploadError(errorMessage(err)),
+  });
+
   const form = useForm({
     defaultValues: {
       judul: editing?.judul ?? "",
@@ -88,6 +110,29 @@ export function ContentsPage() {
       });
     },
   });
+
+  function submitUpload(e: React.FormEvent) {
+    e.preventDefault();
+    setUploadError(null);
+    const judul = uploadJudul.trim();
+    if (!judul) {
+      setUploadError("Judul wajib diisi.");
+      return;
+    }
+    if (!uploadFile) {
+      setUploadError("Pilih file gambar atau video untuk diunggah.");
+      return;
+    }
+    if (!ALLOWED_UPLOAD_MIME_TYPES.includes(uploadFile.type as (typeof ALLOWED_UPLOAD_MIME_TYPES)[number])) {
+      setUploadError("Tipe file tidak didukung. Gunakan gambar (jpeg, png, webp, gif) atau video (mp4, webm).");
+      return;
+    }
+    if (uploadFile.size > MAX_UPLOAD_SIZE_BYTES) {
+      setUploadError("Ukuran file melebihi batas 50 MB.");
+      return;
+    }
+    uploadMutation.mutate({ judul, file: uploadFile });
+  }
 
   function openCreate() {
     setEditing(null);
@@ -152,9 +197,49 @@ export function ContentsPage() {
   return (
     <div className="space-y-4">
       <Card>
+        <CardHeader className="space-y-1">
+          <CardTitle>Upload Gambar/Video</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Unggah file ke Storage dan buat Content otomatis (gambar: jpeg, png, webp, gif; video: mp4, webm; maks 50 MB).
+          </p>
+        </CardHeader>
+        <CardContent>
+          <form className="space-y-4" onSubmit={submitUpload}>
+            <div className="space-y-1">
+              <Label htmlFor="upload-judul">Judul</Label>
+              <Input
+                id="upload-judul"
+                value={uploadJudul}
+                onChange={(e) => setUploadJudul(e.target.value)}
+                placeholder="Judul content"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="upload-file">File gambar/video</Label>
+              <Input
+                id="upload-file"
+                ref={uploadInputRef}
+                type="file"
+                accept={ALLOWED_UPLOAD_MIME_TYPES.join(",")}
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                required
+              />
+            </div>
+            {uploadError && <p className="text-sm text-destructive">{uploadError}</p>}
+            <div className="flex justify-end">
+              <Button type="submit" disabled={uploadMutation.isPending}>
+                {uploadMutation.isPending ? "Mengunggah..." : "Unggah"}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader className="flex-row items-center justify-between space-y-0">
           <CardTitle>Contents</CardTitle>
-          <Button onClick={openCreate}>Tambah Content</Button>
+          <Button onClick={openCreate}>Tambah Teks/URL</Button>
         </CardHeader>
         <CardContent>
           {contentsQuery.isLoading && <p className="text-sm text-muted-foreground">Memuat...</p>}
@@ -204,7 +289,7 @@ export function ContentsPage() {
           setFormOpen(open);
           if (!open) setEditing(null);
         }}
-        title={editing ? "Ubah Content" : "Tambah Content"}
+        title={editing ? "Ubah Content" : "Tambah Teks/URL"}
       >
         <form
           className="space-y-4"
