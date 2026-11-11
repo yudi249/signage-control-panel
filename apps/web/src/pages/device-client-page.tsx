@@ -102,6 +102,7 @@ export function DeviceClientPage() {
   useEffect(() => {
     if (!sync || sync.mode !== "playlist" || sync.playlist.length === 0) return;
     const item = sync.playlist[playlistIndex % sync.playlist.length];
+    if (!item) return;
     const timeoutId = window.setTimeout(() => {
       setPlaylistIndex((i) => (i + 1) % sync.playlist.length);
     }, item.durationSeconds * 1000);
@@ -295,7 +296,9 @@ export function DeviceClientPage() {
 
   if (sync.mode === "playlist" && sync.playlist.length > 0) {
     const item = sync.playlist[playlistIndex % sync.playlist.length];
-    return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}</div>;
+    if (item) {
+      return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}</div>;
+    }
   }
 
   return (
