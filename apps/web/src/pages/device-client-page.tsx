@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import type { Content, SyncMessage } from "@signage/shared";
 import { DEVICE_REPLACED_CLOSE_CODE, deviceServerMessageSchema } from "@signage/shared";
@@ -80,6 +80,7 @@ function DeviceClient({ id }: { id: string }) {
   const [tokenDraft, setTokenDraft] = useState("");
   const [sync, setSync] = useState<SyncMessage | undefined>(undefined);
   const [playlistIndex, setPlaylistIndex] = useState(0);
+  const [syncGeneration, setSyncGeneration] = useState(0);
   const [state, setState] = useState<ScreenState>(() =>
     getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" },
   );
@@ -96,7 +97,7 @@ function DeviceClient({ id }: { id: string }) {
     const item = sync.playlist[playlistIndex % sync.playlist.length];
     if (!item) return;
     const timeoutId = window.setTimeout(() => {
-      setPlaylistIndex((i) => (i + 1) % sync.playlist.length);
+      setPlaylistIndex((i) => i + 1);
     }, item.durationSeconds * 1000);
     return () => window.clearTimeout(timeoutId);
   }, [sync, playlistIndex]);
@@ -212,6 +213,7 @@ function DeviceClient({ id }: { id: string }) {
             attemptRef.current = 0;
             setState({ kind: "connected" });
             setPlaylistIndex(0);
+            setSyncGeneration((generation) => generation + 1);
             setSync(msg.data);
           }
         } catch {
@@ -345,13 +347,13 @@ function DeviceClient({ id }: { id: string }) {
   }
 
   if (sync.mode === "push" && sync.pushed) {
-    return <div className="h-screen w-screen bg-black text-white">{renderContent(sync.pushed)}{recovery}</div>;
+    return <div className="h-screen w-screen bg-black text-white"><Fragment key={syncGeneration}>{renderContent(sync.pushed)}</Fragment>{recovery}</div>;
   }
 
   if (sync.mode === "playlist" && sync.playlist.length > 0) {
     const item = sync.playlist[playlistIndex % sync.playlist.length];
     if (item) {
-      return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}{recovery}</div>;
+      return <div className="h-screen w-screen bg-black text-white"><Fragment key={`${syncGeneration}:${playlistIndex}`}>{renderContent(item.content)}</Fragment>{recovery}</div>;
     }
   }
 

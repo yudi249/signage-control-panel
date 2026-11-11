@@ -1,14 +1,12 @@
 import { buildApp, type BuildAppOptions } from "./app.ts";
-import { DevicesRepository, DevicesService } from "./modules/devices/index.ts";
+import { resolveDevicesService } from "./composition.ts";
 
 // Hanya jalur startup proses yang mereset Presence; buildApp tetap bebas efek reset.
 export async function startServer(
   options: BuildAppOptions,
   dependencies: { buildApp: typeof buildApp } = { buildApp },
 ): Promise<void> {
-  const devicesService = options.devicesService !== undefined
-    ? options.devicesService
-    : options.db ? new DevicesService(new DevicesRepository(options.db)) : null;
+  const devicesService = resolveDevicesService(options);
   const app = await dependencies.buildApp({ ...options, devicesService });
   try {
     if (devicesService) await devicesService.resetAllOffline();

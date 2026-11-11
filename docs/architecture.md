@@ -107,6 +107,7 @@ modules/devices/
 
 - **Route** hanya memvalidasi input dengan skema `packages/shared`, memanggil service, dan memetakan hasil ke HTTP. Tidak ada aturan bisnis.
 - **Service** memegang aturan bisnis dan tidak tahu tentang Fastify. Service menerima repository lewat konstruktor sehingga bisa diuji dengan repository palsu.
+- Presence menerima fungsi verifikasi token Admin dan pelapor kegagalan yang sempit; adapter composition root/modul menghubungkannya ke JWT dan logger Fastify. `composition.ts` menyediakan satu jalur perakitan DevicesService yang dipakai `app.ts` dan `startup.ts`.
 - **Repository** hanya membungkus akses Supabase dan mengembalikan tipe dari `packages/shared`. Tidak ada logika, dan tidak dibuat generik.
 - Lapisan hanya boleh menunjuk ke bawah: route ke service ke repository. Repository tidak pernah diimpor dari luar modulnya.
 
@@ -218,6 +219,8 @@ Koneksi sah terbaru mengambil alih Device yang sama. Koneksi lama ditutup dengan
 
 Registry mengikat message, close, error, heartbeat, timeout, dan hasil async ke identitas koneksi. Hasil sync lama hanya boleh dikirim ke socket asal yang masih aktif. Penulisan Presence diurutkan per Device, diperiksa sebelum operasi dan sebelum siaran; penulisan yang sudah berjalan diselesaikan sebelum Presence pengganti ditulis, sehingga hasil akhirnya tetap mengikuti koneksi terbaru.
 
+Setiap permintaan sync pada koneksi yang sama membatalkan hak kirim permintaan sebelumnya: hasil pembacaan Device, Content, atau Playlist yang selesai terlambat tidak boleh menimpa sync lebih baru. Koneksi baru hanya boleh mengirim sync dan menerima acknowledgment setelah penulisan Online berhasil. Kegagalan penulisan Online dilaporkan melalui fungsi pelapor, menutup socket dengan `1011`, dan membersihkan registry/timer agar retry dapat memulihkan Presence.
+
 | Arah | Pesan | Isi |
 | --- | --- | --- |
 | Server ke Device | `sync` | Keadaan lengkap: Content yang di-push, atau Playlist. Dikirim saat tersambung dan tiap ada perubahan |
@@ -234,6 +237,8 @@ dan callback socket lama tidak memperpanjang watchdog. Timeout memakai jalur ret
 berjitter yang sama dengan gangguan jaringan dan mempertahankan tayangan terakhir.
 Heartbeat dan watchdog dibersihkan ketika percobaan berakhir, retry manual,
 pergantian Device/token, atau unmount.
+
+Setiap sync valid memberi identitas playback baru dan memulai Playlist dari item pertama. Setiap transisi Playlist juga memberi identitas playback baru, termasuk Content duplikat dan putaran Playlist satu item. Elemen media dipasang ulang sehingga video mulai dari awal walaupun URL sama. Ack, rerender biasa, dan gangguan sementara mempertahankan elemen media serta playback yang sedang berjalan.
 
 ### `/ws/admin` (Dashboard)
 

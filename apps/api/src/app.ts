@@ -4,7 +4,8 @@ import fastifyJwt from "@fastify/jwt";
 import { authModule, verifyAdminRequest } from "./modules/auth/index.ts";
 import { contentsModule, ContentsRepository, ContentsService } from "./modules/contents/index.ts";
 import type { ContentStorage } from "./modules/contents/index.ts";
-import { devicesModule, DevicesRepository, DevicesService } from "./modules/devices/index.ts";
+import { devicesModule, type DevicesService } from "./modules/devices/index.ts";
+import { resolveDevicesService } from "./composition.ts";
 import { playlistsModule, PlaylistsRepository, PlaylistsService } from "./modules/playlists/index.ts";
 import { presenceModule, PresenceService } from "./modules/presence/index.ts";
 import type { Config } from "./platform/config.ts";
@@ -55,12 +56,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   app.get("/health", async () => ({ status: "ok" }));
 
-  const devicesService =
-    opts.devicesService !== undefined
-      ? opts.devicesService
-      : opts.db
-        ? new DevicesService(new DevicesRepository(opts.db))
-        : null;
+  const devicesService = resolveDevicesService(opts);
 
   const contentsService =
     opts.contentsService !== undefined
@@ -80,7 +76,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     opts.presenceService !== undefined
       ? opts.presenceService
       : devicesService || opts.db
-        ? new PresenceService(app, opts.db, devicesService, contentsService, playlistsService)
+        ? new PresenceService({
+            verifyAdminToken: (token) => app.jwt.verify(token),
+            reportFailure: (err, deviceId, status) => app.log.error({ err, deviceId, status }, "Gagal menyimpan Presence"),
+          }, opts.db, devicesService, contentsService, playlistsService)
         : null;
 
   if (contentsService && typeof (contentsService as any).setDeleteIntegrity === "function") {

@@ -51,6 +51,44 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it("sync valid identik memulai ulang elemen video tanpa reset pada ack, rerender, atau disconnect sementara", () => {
+  const view = start();
+  const message = { ...push("https://example.com/video.mp4"), pushed: { ...content("https://example.com/video.mp4"), tipe: "video" } };
+  act(() => socket().message(message));
+  const first = view.container.querySelector("video")!;
+  first.currentTime = 12;
+  act(() => socket().message({ type: "heartbeat_ack" }));
+  view.rerender(<DeviceClientPage />);
+  expect(view.container.querySelector("video")).toBe(first);
+  expect(first.currentTime).toBe(12);
+  act(() => socket().disconnect(1011));
+  expect(view.container.querySelector("video")).toBe(first);
+  advance(500);
+  act(() => { socket().open(); socket().message(message); });
+  const recovered = view.container.querySelector("video")!;
+  expect(recovered).not.toBe(first);
+  expect(recovered.currentTime).toBe(0);
+  act(() => socket().message(message));
+  expect(view.container.querySelector("video")).not.toBe(recovered);
+});
+
+it.each([1, 2])("Playlist %i item video identik memulai ulang setiap transisi dan putaran", (count) => {
+  const view = start();
+  const video = { ...content("https://example.com/video.mp4"), tipe: "video" };
+  act(() => socket().message({ type: "sync", mode: "playlist", pushed: null,
+    playlist: Array.from({ length: count }, (_, position) => ({ position, durationSeconds: 2, content: video })),
+  }));
+  let previous = view.container.querySelector("video")!;
+  for (let transition = 0; transition < 3; transition++) {
+    previous.currentTime = 1.5;
+    advance(2000);
+    const current = view.container.querySelector("video")!;
+    expect(current).not.toBe(previous);
+    expect(current.currentTime).toBe(0);
+    previous = current;
+  }
+});
+
 it("connect yang macet dibatalkan pada 15 detik lalu retry dengan backoff bertambah", () => {
   render(<DeviceClientPage />);
   const old = socket();

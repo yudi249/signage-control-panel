@@ -26,7 +26,10 @@ export const presenceModule: FastifyPluginAsync<PresenceModuleOptions> = async (
   const service =
     opts.service ??
     new PresenceService(
-      app,
+      {
+        verifyAdminToken: (token) => app.jwt.verify(token),
+        reportFailure: (err, deviceId, status) => app.log.error({ err, deviceId, status }, "Gagal menyimpan Presence"),
+      },
       opts.db,
       opts.devicesService,
       (opts.contentsService as any) ?? null,
