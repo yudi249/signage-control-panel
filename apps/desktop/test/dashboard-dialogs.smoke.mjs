@@ -1,0 +1,66 @@
+import { chromium } from 'playwright';
+import assert from 'node:assert/strict';
+// Jalankan dev server web terlebih dahulu. API dimock; tidak mengubah data nyata.
+const browser = await chromium.launch({ channel: 'msedge', headless: true });
+try {
+  const page = await browser.newPage();
+  page.on('pageerror', error => console.log('PAGE ERROR', error.message));
+  await page.goto('http://localhost:5173/login');
+  await page.evaluate(() => localStorage.setItem('admin_jwt', 'test'));
+  const device = { id: '00000000-0000-4000-8000-000000000001', nama: 'Layar Uji', lokasi: 'Lobby', status: 'offline', lastSeen: null, pushedContentId: null };
+  const content = { id: '00000000-0000-4000-8000-000000000002', judul: 'Pengumuman', tipe: 'text', payload: 'Selamat datang', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  const writes = [];
+  await page.route('**/api/devices', route => route.fulfill({ json: [device] }));
+  await page.route('**/api/contents', route => route.fulfill({ json: [content] }));
+  await page.route('**/api/devices/*/playlist', route => { if (route.request().method() === 'PUT') writes.push('playlist'); return route.fulfill({ json: [] }); });
+  await page.route('**/api/devices/*/push', route => { writes.push(route.request().method()); device.pushedContentId = route.request().method() === 'POST' ? content.id : null; return route.fulfill({ json: device }); });
+  await page.routeWebSocket('**/ws/admin', () => {});
+  await page.goto('http://localhost:5173/devices');
+  await page.getByRole('button', { name: 'Tambah Device', exact: true }).click({ noWaitAfter: true });
+  await page.getByRole('dialog', { name: 'Tambah Device', exact: true }).waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: 'Atur konten', exact: true }).click();
+  await page.getByLabel('Mode pemutaran').selectOption('direct');
+  await page.getByRole('button', { name: 'Pilih dari galeri', exact: true }).click();
+  await page.getByRole('radio', { name: 'Pilih Pengumuman', exact: true }).check();
+  await page.getByRole('button', { name: 'Gunakan konten ini', exact: true }).click();
+  assert.equal(writes.length, 0, 'Pilihan saja tidak mengirim perintah');
+  await page.getByRole('button', { name: 'Tayangkan konten', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.deepEqual(writes, ['POST']);
+  await page.getByRole('button', { name: 'Atur konten', exact: true }).click();
+  await page.getByLabel('Mode pemutaran').selectOption('playlist');
+  await page.getByRole('button', { name: 'Tambah konten', exact: false }).click();
+  await page.getByLabel('Cari konten playlist').fill('Tidak ditemukan');
+  await page.getByText('Tidak ada konten yang sesuai.', { exact: false }).waitFor();
+  await page.getByLabel('Cari konten playlist').fill('Pengumuman');
+  await page.getByRole('checkbox', { name: 'Pilih Pengumuman', exact: true }).check();
+  await page.getByRole('button', { name: 'Tambahkan 1 konten', exact: true }).click();
+  await page.getByText('1. Pengumuman', { exact: true }).waitFor();
+  assert.equal(await page.getByLabel('Durasi (detik)', { exact: true }).inputValue(), '10');
+  assert.deepEqual(writes, ['POST'], 'Menambahkan item hanya mengubah draft');
+  await page.getByRole('button', { name: 'Simpan & gunakan playlist', exact: true }).click();
+  await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  assert.deepEqual(writes, ['POST', 'playlist', 'DELETE']);
+  await page.goto('http://localhost:5173/contents');
+  await page.getByRole('button', { name: 'Aksi Pengumuman', exact: true }).click();
+  await page.getByRole('button', { name: 'Lihat detail', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Detail konten', exact: true }).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Tutup detail', exact: true }).click();
+  await page.getByRole('button', { name: 'Aksi Pengumuman', exact: true }).click();
+  await page.getByRole('button', { name: 'Ubah konten', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Ubah konten', exact: true }).waitFor({ state: 'visible' });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Aksi Pengumuman', exact: true }).click();
+  await page.getByRole('button', { name: 'Hapus konten', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Hapus Content', exact: true }).waitFor({ state: 'visible' });
+  await page.getByRole('button', { name: 'Batal', exact: true }).click();
+  for (const name of ['Tambah Teks/URL', 'Unggah file']) {
+    await page.getByRole('button', { name, exact: true }).click({ noWaitAfter: true });
+    await page.getByRole('dialog').waitFor({ state: 'visible' });
+    await page.getByRole('button', { name: 'Tutup', exact: true }).click({ noWaitAfter: true });
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+  }
+  console.log('PASS: modal Device/konten/upload, Escape, Tutup, pilihan mode tanpa side effect, Push, dan simpan playlist sebelum Release');
+} finally { await browser.close(); }

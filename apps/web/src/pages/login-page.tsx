@@ -38,10 +38,11 @@ export function LoginPage() {
   });
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-sm">
+    <div className="login-layout">
+      <div className="login-intro"><span className="brand"><span className="brand-mark">s</span> Signage Control Panel</span><div><p className="eyebrow">Workspace administrator</p><h1>Konten yang tepat.<br />Di setiap layar.</h1><p>Kelola Device, susun playlist, dan pantau koneksi layar dari satu tempat.</p><div className="login-capabilities"><span>Device & presence</span><span>Pustaka konten</span><span>Playlist & Push</span></div></div><p>Signage Control Panel</p></div>
+      <div className="login-form-area"><Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Masuk Admin</CardTitle>
+          <p className="eyebrow">Akses administrator</p><CardTitle>Masuk ke workspace</CardTitle><p className="text-sm text-muted-foreground">Gunakan akun Admin untuk mengelola tayangan.</p>
         </CardHeader>
         <CardContent>
           <form
@@ -83,7 +84,7 @@ export function LoginPage() {
                 </div>
               )}
             </form.Field>
-            {error && <p className="text-sm text-destructive">{error}</p>}
+            {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
             <form.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting]}>
               {([canSubmit, isSubmitting]) => (
                 <Button type="submit" className="w-full" disabled={!canSubmit || isSubmitting}>
@@ -94,6 +95,7 @@ export function LoginPage() {
           </form>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
