@@ -8,6 +8,7 @@ import {
   type SnapshotMessage,
   type SyncMessage,
 } from "@signage/shared";
+import type { Content } from "@signage/shared";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "ws";
@@ -35,8 +36,8 @@ interface DevicesApi {
 }
 
 interface ContentsApi {
-  findById?(id: string): Promise<SyncMessage["content"] | null>;
-  get?(id: string): Promise<SyncMessage["content"]>;
+  findById?(id: string): Promise<Content | null>;
+  get?(id: string): Promise<Content>;
 }
 
 interface ContentRow {
@@ -259,7 +260,7 @@ export class PresenceService {
     }
   }
 
-  private async resolveContent(contentId: string | null): Promise<SyncMessage["content"]> {
+  private async resolveContent(contentId: string | null): Promise<Content | null> {
     if (!contentId) return null;
     if (this.contents) {
       if (this.contents.findById) return this.contents.findById(contentId);
@@ -288,11 +289,18 @@ export class PresenceService {
     };
   }
 
+  private buildSync(pushed: Content | null): SyncMessage {
+    if (pushed) {
+      return syncMessageSchema.parse({ type: "sync", mode: "push", pushed, playlist: [] });
+    }
+    return syncMessageSchema.parse({ type: "sync", mode: "idle", pushed: null, playlist: [] });
+  }
+
   async sendSync(deviceId: string, pushedContentId: string | null): Promise<void> {
     const conn = this.connections.get(deviceId);
     if (!conn || conn.socket.readyState !== 1) return;
-    const content = await this.resolveContent(pushedContentId);
-    const msg: SyncMessage = syncMessageSchema.parse({ type: "sync", content });
+    const pushed = await this.resolveContent(pushedContentId);
+    const msg = this.buildSync(pushed);
     conn.socket.send(JSON.stringify(msg));
   }
 

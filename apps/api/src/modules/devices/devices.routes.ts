@@ -1,11 +1,10 @@
-import { createDeviceSchema, updateDeviceSchema } from "@signage/shared";
+import { createDeviceSchema, pushRequestSchema, updateDeviceSchema } from "@signage/shared";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { AppError, notFound } from "../../platform/errors.ts";
 import type { DevicesService } from "./devices.service.ts";
 
 const idParams = z.object({ id: z.string().uuid() });
-const setActiveContentSchema = z.object({ contentId: z.string().uuid() });
 
 interface ContentsLookup {
   get?(id: string): Promise<unknown>;
@@ -71,9 +70,9 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
     return rotated;
   });
 
-  app.put("/devices/:id/active-content", async (req) => {
+  app.post("/devices/:id/push", async (req) => {
     const { id } = idParams.parse(req.params);
-    const { contentId } = setActiveContentSchema.parse(req.body);
+    const { contentId } = pushRequestSchema.parse(req.body);
     const device = await service.findById(id);
     if (!device) throw notFound("Device");
     if (!contentsService) throw notFound("Content");
@@ -90,7 +89,7 @@ export const devicesRoutes: FastifyPluginAsync<DevicesRoutesOptions> = async (ap
     return updated;
   });
 
-  app.delete("/devices/:id/active-content", async (req) => {
+  app.delete("/devices/:id/push", async (req) => {
     const { id } = idParams.parse(req.params);
     const device = await service.findById(id);
     if (!device) throw notFound("Device");

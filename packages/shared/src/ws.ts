@@ -14,9 +14,21 @@ export const heartbeatMessageSchema = z.object({
 });
 export type HeartbeatMessage = z.infer<typeof heartbeatMessageSchema>;
 
+export const syncPlaylistItemSchema = z.object({
+  position: z.number().int().nonnegative(),
+  durationSeconds: z.number().int().positive(),
+  content: contentSchema,
+});
+export type SyncPlaylistItem = z.infer<typeof syncPlaylistItemSchema>;
+
+export const syncModeSchema = z.enum(["push", "playlist", "idle"]);
+export type SyncMode = z.infer<typeof syncModeSchema>;
+
 export const syncMessageSchema = z.object({
   type: z.literal("sync"),
-  content: contentSchema.nullable(),
+  mode: syncModeSchema,
+  pushed: contentSchema.nullable(),
+  playlist: z.array(syncPlaylistItemSchema),
 });
 export type SyncMessage = z.infer<typeof syncMessageSchema>;
 
@@ -64,3 +76,8 @@ export type AdminAuthMessage = z.infer<typeof adminAuthMessageSchema>;
 
 export const adminClientMessageSchema = adminAuthMessageSchema;
 export type AdminClientMessage = z.infer<typeof adminClientMessageSchema>;
+
+export const pushRequestSchema = z.object({
+  contentId: z.string().uuid(),
+});
+export type PushRequest = z.infer<typeof pushRequestSchema>;
