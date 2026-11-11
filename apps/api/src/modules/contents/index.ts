@@ -5,11 +5,27 @@ import { ContentsRepository } from "./contents.repository.ts";
 import { ContentsService } from "./contents.service.ts";
 import { SupabaseContentStorage, type ContentStorage } from "./contents.storage.ts";
 
+interface PlaylistsIntegrityApi {
+  isContentReferenced?(contentId: string): Promise<boolean>;
+}
+
+interface DevicesIntegrityApi {
+  listPushedByContent?(contentId: string): Promise<Array<{ id: string }>>;
+  setActiveContent?(id: string, pushedContentId: string | null): Promise<unknown | null>;
+}
+
+interface PresenceNotifyApi {
+  sendSync(deviceId: string): Promise<void>;
+}
+
 export interface ContentsModuleOptions {
   db: SupabaseClient | null;
   service?: ContentsService;
   storage?: ContentStorage | null;
   bucket?: string;
+  playlistsService?: PlaylistsIntegrityApi | null;
+  devicesService?: DevicesIntegrityApi | null;
+  presenceService?: PresenceNotifyApi | null;
 }
 
 export const contentsModule: FastifyPluginAsync<ContentsModuleOptions> = async (app, opts) => {
@@ -30,6 +46,9 @@ export const contentsModule: FastifyPluginAsync<ContentsModuleOptions> = async (
     service,
     storage: storage ?? null,
     bucket: opts.bucket ?? "contents",
+    playlistsService: opts.playlistsService ?? null,
+    devicesService: opts.devicesService ?? null,
+    presenceService: opts.presenceService ?? null,
   });
 };
 

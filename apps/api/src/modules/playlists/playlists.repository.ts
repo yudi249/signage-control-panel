@@ -70,4 +70,14 @@ export class PlaylistsRepository {
     const { error: insError } = await this.db.from("playlist_items").insert(rows);
     if (insError) throw new Error(insError.message);
   }
+
+  async isContentReferenced(contentId: string): Promise<boolean> {
+    const { data, error } = await this.db
+      .from("playlist_items")
+      .select("id")
+      .eq("content_id", contentId)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    return Array.isArray(data) && data.length > 0;
+  }
 }
