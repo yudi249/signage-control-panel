@@ -13,6 +13,7 @@ export interface BuildAppOptions {
   config: Config;
   db: Db | null;
   events: EventBus;
+  devicesService?: DevicesService | null;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
@@ -21,7 +22,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   app.get("/health", async () => ({ status: "ok" }));
 
-  const devicesService = opts.db ? new DevicesService(new DevicesRepository(opts.db)) : null;
+  const devicesService =
+    opts.devicesService !== undefined
+      ? opts.devicesService
+      : opts.db
+        ? new DevicesService(new DevicesRepository(opts.db))
+        : null;
 
   await app.register(authModule, { prefix: "/api" });
   await app.register(devicesModule, { prefix: "/api", db: opts.db, service: devicesService ?? undefined });

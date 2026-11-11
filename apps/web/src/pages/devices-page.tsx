@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import {
@@ -7,7 +7,8 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { CreateDevice, Device, UpdateDevice } from "@signage/shared";
+import type { AdminServerMessage, CreateDevice, Device, UpdateDevice } from "@signage/shared";
+import { adminServerMessageSchema } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +43,43 @@ export function DevicesPage() {
     queryKey: ["devices"],
     queryFn: () => api.get<Device[]>("/api/devices"),
   });
+
+  useEffect(() => {
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/admin`);
+
+    const onMessage = (ev: MessageEvent) => {
+      try {
+        const parsed = adminServerMessageSchema.safeParse(JSON.parse(String(ev.data)));
+        if (!parsed.success) return;
+        const msg: AdminServerMessage = parsed.data;
+        qc.setQueryData<Device[]>(["devices"], (prev) => {
+          if (!prev) return prev;
+          if (msg.type === "snapshot") {
+            const byId = new Map(msg.devices.map((d) => [d.deviceId, d]));
+            return prev.map((d) => {
+              const p = byId.get(d.id);
+              return p ? { ...d, status: p.status, lastSeen: p.lastSeen } : d;
+            });
+          }
+          if (msg.type === "presence") {
+            return prev.map((d) =>
+              d.id === msg.deviceId ? { ...d, status: msg.status, lastSeen: msg.lastSeen } : d,
+            );
+          }
+          return prev;
+        });
+      } catch {
+        // ignore malformed messages
+      }
+    };
+
+    ws.addEventListener("message", onMessage);
+    return () => {
+      ws.removeEventListener("message", onMessage);
+      try { ws.close(); } catch { /* ignore */ }
+    };
+  }, [qc]);
 
   const saveMutation = useMutation({
     mutationFn: async (values: CreateDevice | UpdateDevice) => {

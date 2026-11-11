@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { contentSchema } from "./content.ts";
+import { deviceStatusSchema } from "./device.ts";
 
 export const helloMessageSchema = z.object({
   type: z.literal("hello"),
@@ -26,3 +27,30 @@ export type DeviceClientMessage = z.infer<typeof deviceClientMessageSchema>;
 
 export const deviceServerMessageSchema = syncMessageSchema;
 export type DeviceServerMessage = z.infer<typeof deviceServerMessageSchema>;
+
+export const presenceSnapshotItemSchema = z.object({
+  deviceId: z.string().uuid(),
+  status: deviceStatusSchema,
+  lastSeen: z.string().datetime({ offset: true }).nullable(),
+});
+export type PresenceSnapshotItem = z.infer<typeof presenceSnapshotItemSchema>;
+
+export const snapshotMessageSchema = z.object({
+  type: z.literal("snapshot"),
+  devices: z.array(presenceSnapshotItemSchema),
+});
+export type SnapshotMessage = z.infer<typeof snapshotMessageSchema>;
+
+export const presenceMessageSchema = z.object({
+  type: z.literal("presence"),
+  deviceId: z.string().uuid(),
+  status: deviceStatusSchema,
+  lastSeen: z.string().datetime({ offset: true }).nullable(),
+});
+export type PresenceMessage = z.infer<typeof presenceMessageSchema>;
+
+export const adminServerMessageSchema = z.discriminatedUnion("type", [
+  snapshotMessageSchema,
+  presenceMessageSchema,
+]);
+export type AdminServerMessage = z.infer<typeof adminServerMessageSchema>;

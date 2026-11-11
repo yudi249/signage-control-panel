@@ -18,5 +18,7 @@ export const presenceModule: FastifyPluginAsync<PresenceModuleOptions> = async (
     void service.handleDeviceSocket(socket);
   });
 
-  // /ws/admin ditambahkan di tiket 02.
+  app.get("/ws/admin", { websocket: true }, (socket) => {
+    void service.handleAdminSocket(socket);
+  });
 };
