@@ -1,3 +1,5 @@
+﻿import { getToken, handleAuthFailure } from "./auth";
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -7,14 +9,25 @@ export class ApiError extends Error {
   }
 }
 
+function isLoginRequest(path: string): boolean {
+  return path.startsWith("/api/auth/login");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-  });
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((init?.headers as Record<string, string> | undefined) ?? {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(path, { ...init, headers });
+
+  if (res.status === 401 && !isLoginRequest(path)) {
+    handleAuthFailure();
+    throw new ApiError(401, "Sesi tidak valid. Silakan masuk kembali.");
+  }
+
   if (!res.ok) {
     let message = `Request gagal (${res.status})`;
     try {
