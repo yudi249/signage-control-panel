@@ -19,6 +19,10 @@ export class DevicesService {
     return device;
   }
 
+  findById(id: string): Promise<Device | null> {
+    return this.repo.findById(id);
+  }
+
   create(input: CreateDevice): Promise<Device> {
     return this.repo.create(input);
   }
@@ -32,5 +36,9 @@ export class DevicesService {
   async delete(id: string): Promise<void> {
     const deleted = await this.repo.delete(id);
     if (!deleted) throw notFound("Device");
+  }
+
+  async setPresence(id: string, status: "online" | "offline"): Promise<Device | null> {
+    return this.repo.setPresence(id, status);
   }
 }

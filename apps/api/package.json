@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@fastify/websocket": "^11.3.7",
     "@signage/shared": "workspace:*",
     "@supabase/supabase-js": "^2.45.0",
     "fastify": "^5.0.0",
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
