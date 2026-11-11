@@ -17,7 +17,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
   const headers: Record<string, string> = {
-    ...(!isFormData ? { "Content-Type": "application/json" } : {}),
+    ...(init?.body != null && !isFormData ? { "Content-Type": "application/json" } : {}),
     ...((init?.headers as Record<string, string> | undefined) ?? {}),
   };
   if (token) headers.Authorization = `Bearer ${token}`;

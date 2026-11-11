@@ -265,6 +265,18 @@ sequenceDiagram
 
 Saat koneksi putus, Device Client mencoba lagi dengan exponential backoff (1 dtk, 2, 4, 8, hingga 30 dtk, ditambah jitter) dan tetap menampilkan Content terakhir selama putus. Setelah tersambung ulang, ia menerima `sync` dan menyamakan tampilannya. Karena `sync` selalu berisi keadaan penuh, bukan selisih, tidak ada pesan yang perlu diputar ulang.
 
+Keputusan desain tahap 6 berikut adalah target implementasi hasil pembahasan:
+
+- Batas backoff 1, 2, 4, 8, 16, lalu 30 detik; jeda dipilih acak antara 50–100% batas. Retry gangguan sementara tidak dibatasi jumlahnya. Penghitung di-reset setelah menerima `sync` valid, bukan saat socket terbuka.
+- Pembukaan socket dan penantian `sync` pertama masing-masing dibatasi 15 detik. Heartbeat aplikasi tetap setiap 15 detik dan mendapat acknowledgment server melalui kontrak bersama; tidak ada `sync`/ack valid selama 45 detik memicu pemulihan koneksi.
+- Selama gangguan sementara (termasuk close 1011), Content terakhir tetap tampil dan Playlist terus berputar. Indikator kecil menyediakan tombol Coba sekarang. Sebelum `sync` pertama, tampilkan Menghubungkan.
+- Keadaan tayangan hanya dipertahankan di memori selama halaman terbuka. Tidak ada jaminan pemulihan setelah refresh offline atau caching media; gambar, video, dan URL tetap bergantung pada jaringan/cache browser.
+- Penolakan identitas/token (1008) menghentikan retry dan tayangan, lalu menampilkan pesan serta tindakan Ganti token.
+- Koneksi terbaru Device mengambil alih. Koneksi lama ditutup dengan kode khusus, menghentikan tayangan/retry otomatis, dan menampilkan Hubungkan kembali. Callback socket lama tidak boleh memengaruhi registry/heartbeat socket baru.
+- Setiap `sync` baru menerapkan keadaan server terbaru dan memulai Playlist dari item pertama. Tombol retry manual, pergantian Device/token, dan unmount membersihkan percobaan lama sehingga hanya satu percobaan aktif.
+- Sebelum listen pada startup satu instance, reset status tersimpan semua Device ke Offline tanpa mengubah Last Seen. Kegagalan reset menggagalkan startup. Device yang reconnect ditandai Online kembali.
+- Cakupan pemulihan tahap 6 adalah Device Client dan dukungan servernya; reconnect Dashboard tidak termasuk.
+
 ## Mode kegagalan
 
 | Kegagalan | Dampak | Penanganan |
