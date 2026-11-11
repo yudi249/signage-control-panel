@@ -1,7 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import type { Content, SyncMessage } from "@signage/shared";
 import { syncMessageSchema } from "@signage/shared";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+function tokenStorageKey(deviceId: string) {
+  return `device-token:${deviceId}`;
+}
+
+function getStoredToken(deviceId: string): string | null {
+  try {
+    return window.localStorage.getItem(tokenStorageKey(deviceId));
+  } catch {
+    return null;
+  }
+}
+
+function setStoredToken(deviceId: string, token: string) {
+  window.localStorage.setItem(tokenStorageKey(deviceId), token);
+}
+
+function clearStoredToken(deviceId: string) {
+  try {
+    window.localStorage.removeItem(tokenStorageKey(deviceId));
+  } catch {
+    // ignore
+  }
+}
 
 function renderContent(content: Content) {
   switch (content.tipe) {
@@ -36,12 +63,23 @@ function renderContent(content: Content) {
   }
 }
 
+type ScreenState =
+  | { kind: "needs-token"; notice?: string }
+  | { kind: "connecting" }
+  | { kind: "connected" }
+  | { kind: "error"; message: string; canReplaceToken: boolean };
+
 export function DeviceClientPage() {
   const { id } = useParams({ from: "/device/$id" });
+  const [token, setToken] = useState<string | null>(() => getStoredToken(id));
+  const [tokenDraft, setTokenDraft] = useState("");
   const [content, setContent] = useState<Content | null | undefined>(undefined);
-  const [status, setStatus] = useState<"connecting" | "connected" | "error">("connecting");
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<ScreenState>(() =>
+    getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" },
+  );
   const hbRef = useRef<number | null>(null);
+  const reconnectRef = useRef<number | null>(null);
+  const attemptRef = useRef(0);
 
   const wsUrl = useMemo(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -49,86 +87,184 @@ export function DeviceClientPage() {
   }, []);
 
   useEffect(() => {
+    setToken(getStoredToken(id));
+    setContent(undefined);
+    attemptRef.current = 0;
+    setState(getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" });
+  }, [id]);
+
+  const clearReconnect = () => {
+    if (reconnectRef.current) window.clearTimeout(reconnectRef.current);
+    reconnectRef.current = null;
+  };
+
+  const replaceToken = useCallback(
+    (notice?: string) => {
+      clearStoredToken(id);
+      setToken(null);
+      setTokenDraft("");
+      setContent(undefined);
+      attemptRef.current = 0;
+      setState({ kind: "needs-token", notice });
+    },
+    [id],
+  );
+
+  useEffect(() => {
+    if (!token) return;
+
     let ws: WebSocket | null = null;
     let closed = false;
 
-    function cleanup() {
+    function cleanupHeartbeat() {
       if (hbRef.current) window.clearInterval(hbRef.current);
       hbRef.current = null;
     }
 
-    try {
-      ws = new WebSocket(wsUrl);
-    } catch {
-      setStatus("error");
-      setError("Gagal membuka koneksi WebSocket.");
-      return;
+    function scheduleReconnect() {
+      if (closed) return;
+      const delay = Math.min(1000 * 2 ** attemptRef.current, 30000);
+      attemptRef.current = Math.min(attemptRef.current + 1, 10);
+      setState({ kind: "connecting" });
+      clearReconnect();
+      reconnectRef.current = window.setTimeout(connect, delay);
     }
 
-    const token = window.localStorage.getItem(`device-token:${id}`) ?? "";
-    ws.onopen = () => {
+    function connect() {
       if (closed) return;
-      ws?.send(JSON.stringify({ type: "hello", deviceId: id, token }));
-      setStatus("connected");
-      hbRef.current = window.setInterval(() => {
-        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "heartbeat" }));
-      }, 15000);
-    };
-
-    ws.onmessage = (ev) => {
       try {
-        const parsed = JSON.parse(String(ev.data));
-        const msg = syncMessageSchema.safeParse(parsed) as
-          | { success: true; data: SyncMessage }
-          | { success: false };
-        if (msg.success) setContent(msg.data.content);
+        ws = new WebSocket(wsUrl);
       } catch {
-        // ignore non-json
+        scheduleReconnect();
+        return;
       }
-    };
 
-    ws.onclose = (ev) => {
-      cleanup();
-      if (closed) return;
-      if (ev.code === 1008) {
-        setStatus("error");
-        setError(ev.reason || "Identifikasi device ditolak.");
-      } else if (ev.code === 1011) {
-        setStatus("error");
-        setError(ev.reason || "Server belum siap.");
-      } else {
-        setStatus("error");
-        setError("Koneksi terputus.");
-      }
-    };
+      ws.onopen = () => {
+        if (closed) return;
+        attemptRef.current = 0;
+        setState({ kind: "connected" });
+        ws?.send(JSON.stringify({ type: "hello", deviceId: id, token }));
+        hbRef.current = window.setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "heartbeat" }));
+        }, 15000);
+      };
 
-    ws.onerror = () => {
-      // onclose will handle state
-    };
+      ws.onmessage = (ev) => {
+        try {
+          const parsed = JSON.parse(String(ev.data));
+          const msg = syncMessageSchema.safeParse(parsed) as
+            | { success: true; data: SyncMessage }
+            | { success: false };
+          if (msg.success) setContent(msg.data.content);
+        } catch {
+          // ignore non-json
+        }
+      };
+
+      ws.onclose = (ev) => {
+        cleanupHeartbeat();
+        if (closed) return;
+        if (ev.code === 1008) {
+          closed = true;
+          clearReconnect();
+          const reason = ev.reason?.trim() || "Autentikasi atau identitas perangkat ditolak.";
+          setState({ kind: "error", message: reason, canReplaceToken: true });
+          return;
+        }
+        if (ev.code === 1011) {
+          closed = true;
+          clearReconnect();
+          setState({
+            kind: "error",
+            message: ev.reason || "Server belum siap.",
+            canReplaceToken: false,
+          });
+          return;
+        }
+        scheduleReconnect();
+      };
+
+      ws.onerror = () => {
+        // onclose handles reconnect/state
+      };
+    }
+
+    connect();
 
     return () => {
       closed = true;
-      cleanup();
+      clearReconnect();
+      cleanupHeartbeat();
       try {
         ws?.close();
       } catch {
         // ignore
       }
     };
-  }, [id, wsUrl]);
+  }, [id, token, wsUrl]);
 
-  if (status === "error") {
+  if (state.kind === "needs-token") {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
-        <div className="space-y-2 text-center">
-          <p className="text-xl font-semibold">Device Client</p>
-          <p className="text-sm text-red-400">{error ?? "Terjadi kesalahan koneksi."}</p>
+      <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 p-6 text-neutral-100">
+        <div className="w-full max-w-md space-y-4 rounded-lg border border-neutral-800 bg-neutral-900 p-6">
+          <div className="space-y-1">
+            <h1 className="text-xl font-semibold">Device Client</h1>
+            <p className="text-sm text-neutral-400">Masukkan device token untuk perangkat ini.</p>
+          </div>
+          {state.notice && <p className="text-sm text-amber-400">{state.notice}</p>}
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const value = tokenDraft.trim();
+              if (!value) return;
+              setStoredToken(id, value);
+              setToken(value);
+              setContent(undefined);
+              attemptRef.current = 0;
+              setState({ kind: "connecting" });
+            }}
+          >
+            <div className="space-y-1">
+              <Label htmlFor="device-token">Token perangkat</Label>
+              <Input
+                id="device-token"
+                type="password"
+                autoComplete="off"
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                placeholder="Tempel token di sini"
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={!tokenDraft.trim()}>
+              Simpan dan hubungkan
+            </Button>
+          </form>
         </div>
       </div>
     );
   }
 
-  if (status === "connecting" || content === undefined) {
+  if (state.kind === "error") {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
+        <div className="space-y-4 text-center">
+          <div className="space-y-2">
+            <p className="text-xl font-semibold">Device Client</p>
+            <p className="text-sm text-red-400">{state.message}</p>
+          </div>
+          {state.canReplaceToken && (
+            <Button variant="outline" onClick={() => replaceToken()}>
+              Ganti token
+            </Button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (state.kind === "connecting" || content === undefined) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
         <p className="text-sm text-neutral-400">Menghubungkan perangkat...</p>
