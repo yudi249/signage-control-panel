@@ -5,7 +5,7 @@ import { createEventBus } from "./platform/events.ts";
 
 const AUTH = {
   ADMIN_USERNAME: "admin",
-  ADMIN_PASSWORD_HASH: "$2b$10$Ez3iVupN5E7xvshVCt7XJuaFDAVieChUV6bafDL6prs.gVOE4i9uq", // "adminpass"
+  ADMIN_PASSWORD_HASH: "713bfda78870bf9d1b261f565286f85e97ee614efe5f0faf7c34e7ca4f65baca", // "adminpass"
   JWT_SECRET: "test-secret-1234567890",
 } as const;
 
@@ -45,8 +45,9 @@ describe("/ws/admin presence", () => {
   });
 
   it("sends snapshot on connect and broadcasts presence on device connect/disconnect", async () => {
+    const tokenHash = (await import("node:crypto")).createHash("sha256").update("dev-token").digest("hex");
     const devices = new Map<string, any>([
-      ["11111111-1111-4111-8111-111111111111", { id: "11111111-1111-4111-8111-111111111111", nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null }],
+      ["11111111-1111-4111-8111-111111111111", { id: "11111111-1111-4111-8111-111111111111", nama: "A", lokasi: "", status: "offline", lastSeen: null, pushedContentId: null, tokenHash }],
     ]);
     const devicesService = {
       list: vi.fn(async () => Array.from(devices.values())),
@@ -80,7 +81,7 @@ describe("/ws/admin presence", () => {
     const presenceP = waitForMessage(admin, (m) => m.type === "presence" && m.status === "online");
     const device = new WebSocket(`${base}/ws/device`);
     await waitForOpen(device);
-    device.send(JSON.stringify({ type: "hello", deviceId: "11111111-1111-4111-8111-111111111111" }));
+    device.send(JSON.stringify({ type: "hello", deviceId: "11111111-1111-4111-8111-111111111111", token: "dev-token" }));
     const online = await presenceP;
     expect(online.deviceId).toBe("11111111-1111-4111-8111-111111111111");
     expect(online.lastSeen).toBeTruthy();
@@ -93,3 +94,4 @@ describe("/ws/admin presence", () => {
     admin.close();
   });
 });
+

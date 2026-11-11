@@ -1,5 +1,6 @@
-import { randomBytes, createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { CreateDevice, Device, UpdateDevice } from "@signage/shared";
+type DeviceWithToken = { device: Device; token: string };
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export interface DeviceRow {
@@ -12,9 +13,13 @@ export interface DeviceRow {
   token_hash: string;
 }
 
+export interface DeviceWithHash extends Device {
+  tokenHash: string;
+}
+
 const DEVICE_COLUMNS = "id,nama,lokasi,status,last_seen,pushed_content_id";
 
-export function toDevice(row: Omit<DeviceRow, "token_hash">): Device {
+function toDevice(row: Omit<DeviceRow, "token_hash">): Device {
   return {
     id: row.id,
     nama: row.nama,
@@ -23,6 +28,18 @@ export function toDevice(row: Omit<DeviceRow, "token_hash">): Device {
     lastSeen: row.last_seen,
     pushedContentId: row.pushed_content_id,
   };
+}
+
+function toDeviceWithHash(row: DeviceRow): DeviceWithHash {
+  return { ...toDevice(row), tokenHash: row.token_hash };
+}
+
+function generateToken(): string {
+  return randomBytes(32).toString("hex");
+}
+
+export function hashDeviceToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
 }
 
 export class DevicesRepository {
@@ -51,16 +68,39 @@ export class DevicesRepository {
     return data ? toDevice(data as Omit<DeviceRow, "token_hash">) : null;
   }
 
-  async create(input: CreateDevice): Promise<Device> {
-    const token = randomBytes(32).toString("hex");
-    const token_hash = createHash("sha256").update(token).digest("hex");
+  async findByIdWithHash(id: string): Promise<DeviceWithHash | null> {
+    const { data, error } = await this.db
+      .from("devices")
+      .select(`${DEVICE_COLUMNS},token_hash`)
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? toDeviceWithHash(data as DeviceRow) : null;
+  }
+
+  async createWithToken(input: CreateDevice): Promise<DeviceWithToken> {
+    const token = generateToken();
+    const token_hash = hashDeviceToken(token);
     const { data, error } = await this.db
       .from("devices")
       .insert({ nama: input.nama, lokasi: input.lokasi ?? "", token_hash })
       .select(DEVICE_COLUMNS)
       .single();
     if (error) throw new Error(error.message);
-    return toDevice(data as Omit<DeviceRow, "token_hash">);
+    return { device: toDevice(data as Omit<DeviceRow, "token_hash">), token };
+  }
+
+  async rotateToken(id: string): Promise<DeviceWithToken | null> {
+    const token = generateToken();
+    const token_hash = hashDeviceToken(token);
+    const { data, error } = await this.db
+      .from("devices")
+      .update({ token_hash })
+      .eq("id", id)
+      .select(DEVICE_COLUMNS)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? { device: toDevice(data as Omit<DeviceRow, "token_hash">), token } : null;
   }
 
   async update(id: string, input: UpdateDevice): Promise<Device | null> {

@@ -5,6 +5,7 @@ import { deviceStatusSchema } from "./device.ts";
 export const helloMessageSchema = z.object({
   type: z.literal("hello"),
   deviceId: z.string().uuid(),
+  token: z.string().min(1),
 });
 export type HelloMessage = z.infer<typeof helloMessageSchema>;
 

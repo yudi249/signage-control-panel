@@ -1,6 +1,7 @@
 import type { CreateDevice, Device, UpdateDevice } from "@signage/shared";
+type DeviceWithToken = { device: Device; token: string };
 import { notFound } from "../../platform/errors.ts";
-import type { DevicesRepository } from "./devices.repository.ts";
+import type { DevicesRepository, DeviceWithHash } from "./devices.repository.ts";
 
 export class DevicesService {
   private readonly repo: DevicesRepository;
@@ -19,12 +20,18 @@ export class DevicesService {
     return device;
   }
 
-  findById(id: string): Promise<Device | null> {
-    return this.repo.findById(id);
+  findById(id: string): Promise<DeviceWithHash | null> {
+    return this.repo.findByIdWithHash(id);
   }
 
-  create(input: CreateDevice): Promise<Device> {
-    return this.repo.create(input);
+  createWithToken(input: CreateDevice): Promise<DeviceWithToken> {
+    return this.repo.createWithToken(input);
+  }
+
+  async rotateToken(id: string): Promise<DeviceWithToken> {
+    const rotated = await this.repo.rotateToken(id);
+    if (!rotated) throw notFound("Device");
+    return rotated;
   }
 
   async update(id: string, input: UpdateDevice): Promise<Device> {

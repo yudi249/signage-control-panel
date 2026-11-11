@@ -65,9 +65,10 @@ export function DeviceClientPage() {
       return;
     }
 
+    const token = window.localStorage.getItem(`device-token:${id}`) ?? "";
     ws.onopen = () => {
       if (closed) return;
-      ws?.send(JSON.stringify({ type: "hello", deviceId: id }));
+      ws?.send(JSON.stringify({ type: "hello", deviceId: id, token }));
       setStatus("connected");
       hbRef.current = window.setInterval(() => {
         if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "heartbeat" }));

@@ -11,6 +11,7 @@ interface ContentsLookup {
 
 interface PresenceNotifier {
   sendSync(deviceId: string, pushedContentId: string | null): Promise<void>;
+  disconnectDevice?(deviceId: string, reason?: string): Promise<void> | void;
 }
 
 export interface DevicesModuleOptions {
