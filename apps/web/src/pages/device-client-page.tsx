@@ -71,6 +71,10 @@ type ScreenState =
 
 export function DeviceClientPage() {
   const { id } = useParams({ from: "/device/$id" });
+  return <DeviceClient key={id} id={id} />;
+}
+
+function DeviceClient({ id }: { id: string }) {
   const [token, setToken] = useState<string | null>(() => getStoredToken(id));
   const [tokenDraft, setTokenDraft] = useState("");
   const [sync, setSync] = useState<SyncMessage | undefined>(undefined);
@@ -78,26 +82,13 @@ export function DeviceClientPage() {
   const [state, setState] = useState<ScreenState>(() =>
     getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" },
   );
-  const hbRef = useRef<number | null>(null);
-  const reconnectRef = useRef<number | null>(null);
+  const retryNowRef = useRef<(() => void) | null>(null);
   const attemptRef = useRef(0);
 
   const wsUrl = useMemo(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.host}/ws/device`;
   }, []);
-
-  useEffect(() => {
-    setToken(getStoredToken(id));
-    setSync(undefined);
-    setPlaylistIndex(0);
-    attemptRef.current = 0;
-    setState(getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" });
-  }, [id]);
-
-  useEffect(() => {
-    if (sync) setPlaylistIndex(0);
-  }, [sync]);
 
   useEffect(() => {
     if (!sync || sync.mode !== "playlist" || sync.playlist.length === 0) return;
@@ -108,11 +99,6 @@ export function DeviceClientPage() {
     }, item.durationSeconds * 1000);
     return () => window.clearTimeout(timeoutId);
   }, [sync, playlistIndex]);
-
-  const clearReconnect = () => {
-    if (reconnectRef.current) window.clearTimeout(reconnectRef.current);
-    reconnectRef.current = null;
-  };
 
   const replaceToken = useCallback(
     (notice?: string) => {
@@ -132,91 +118,99 @@ export function DeviceClientPage() {
 
     let ws: WebSocket | null = null;
     let closed = false;
+    let heartbeat: number | undefined;
+    let reconnect: number | undefined;
 
-    function cleanupHeartbeat() {
-      if (hbRef.current) window.clearInterval(hbRef.current);
-      hbRef.current = null;
+    function cancelAttempt() {
+      window.clearTimeout(reconnect);
+      window.clearInterval(heartbeat);
+      reconnect = undefined;
+      heartbeat = undefined;
+      const previous = ws;
+      ws = null;
+      if (previous) {
+        previous.onopen = null;
+        previous.onmessage = null;
+        previous.onclose = null;
+        previous.onerror = null;
+        previous.close();
+      }
     }
 
     function scheduleReconnect() {
       if (closed) return;
-      const delay = Math.min(1000 * 2 ** attemptRef.current, 30000);
+      const delay = Math.min(1000 * 2 ** attemptRef.current, 30000) * (0.5 + Math.random() * 0.5);
       attemptRef.current = Math.min(attemptRef.current + 1, 10);
       setState({ kind: "connecting" });
-      clearReconnect();
-      reconnectRef.current = window.setTimeout(connect, delay);
+      cancelAttempt();
+      reconnect = window.setTimeout(connect, delay);
     }
 
     function connect() {
       if (closed) return;
+      cancelAttempt();
+      setState({ kind: "connecting" });
+      let current: WebSocket;
       try {
-        ws = new WebSocket(wsUrl);
+        current = new WebSocket(wsUrl);
+        ws = current;
       } catch {
         scheduleReconnect();
         return;
       }
 
-      ws.onopen = () => {
-        if (closed) return;
-        attemptRef.current = 0;
-        setState({ kind: "connected" });
-        ws?.send(JSON.stringify({ type: "hello", deviceId: id, token }));
-        hbRef.current = window.setInterval(() => {
-          if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "heartbeat" }));
+      const isActive = () => !closed && ws === current;
+      current.onopen = () => {
+        if (!isActive()) return;
+        current.send(JSON.stringify({ type: "hello", deviceId: id, token }));
+        window.clearInterval(heartbeat);
+        heartbeat = window.setInterval(() => {
+          if (isActive() && current.readyState === WebSocket.OPEN) current.send(JSON.stringify({ type: "heartbeat" }));
         }, 15000);
       };
 
-      ws.onmessage = (ev) => {
+      current.onmessage = (ev) => {
+        if (!isActive()) return;
         try {
           const parsed = JSON.parse(String(ev.data));
-          const msg = syncMessageSchema.safeParse(parsed) as
-            | { success: true; data: SyncMessage }
-            | { success: false };
-          if (msg.success) setSync(msg.data);
+          const msg = syncMessageSchema.safeParse(parsed);
+          if (msg.success) {
+            attemptRef.current = 0;
+            setState({ kind: "connected" });
+            setPlaylistIndex(0);
+            setSync(msg.data);
+          }
         } catch {
           // ignore non-json
         }
       };
 
-      ws.onclose = (ev) => {
-        cleanupHeartbeat();
-        if (closed) return;
+      current.onclose = (ev) => {
+        if (!isActive()) return;
         if (ev.code === 1008) {
           closed = true;
-          clearReconnect();
+          cancelAttempt();
+          setSync(undefined);
+          setPlaylistIndex(0);
           const reason = ev.reason?.trim() || "Autentikasi atau identitas perangkat ditolak.";
           setState({ kind: "error", message: reason, canReplaceToken: true });
-          return;
-        }
-        if (ev.code === 1011) {
-          closed = true;
-          clearReconnect();
-          setState({
-            kind: "error",
-            message: ev.reason || "Server belum siap.",
-            canReplaceToken: false,
-          });
           return;
         }
         scheduleReconnect();
       };
 
-      ws.onerror = () => {
-        // onclose handles reconnect/state
+      current.onerror = () => {
+        if (isActive()) scheduleReconnect();
       };
     }
 
+    retryNowRef.current = connect;
     connect();
 
     return () => {
       closed = true;
-      clearReconnect();
-      cleanupHeartbeat();
-      try {
-        ws?.close();
-      } catch {
-        // ignore
-      }
+      retryNowRef.current = null;
+      cancelAttempt();
     };
   }, [id, token, wsUrl]);
 
@@ -282,22 +276,29 @@ export function DeviceClientPage() {
     );
   }
 
-  if (state.kind === "connecting" || sync === undefined) {
+  const recovery = state.kind === "connecting" ? (
+    <div role="status" className={`${sync ? "fixed bottom-4 right-4" : ""} flex items-center gap-3 rounded bg-neutral-900 p-3 text-sm text-neutral-100 shadow`}>
+      <span>Menghubungkan perangkat...</span>
+      <Button variant="outline" onClick={() => retryNowRef.current?.()}>Coba sekarang</Button>
+    </div>
+  ) : null;
+
+  if (sync === undefined) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-neutral-950 text-neutral-100">
-        <p className="text-sm text-neutral-400">Menghubungkan perangkat...</p>
+        {recovery}
       </div>
     );
   }
 
   if (sync.mode === "push" && sync.pushed) {
-    return <div className="h-screen w-screen bg-black text-white">{renderContent(sync.pushed)}</div>;
+    return <div className="h-screen w-screen bg-black text-white">{renderContent(sync.pushed)}{recovery}</div>;
   }
 
   if (sync.mode === "playlist" && sync.playlist.length > 0) {
     const item = sync.playlist[playlistIndex % sync.playlist.length];
     if (item) {
-      return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}</div>;
+      return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}{recovery}</div>;
     }
   }
 
@@ -307,6 +308,7 @@ export function DeviceClientPage() {
         <p className="text-2xl font-semibold">Menunggu konten</p>
         <p className="text-sm text-neutral-400">Belum ada konten aktif untuk perangkat ini.</p>
       </div>
+      {recovery}
     </div>
   );
 }

@@ -267,6 +267,13 @@ Saat koneksi putus, Device Client mencoba lagi dengan exponential backoff (1 dtk
 
 Keputusan desain tahap 6 berikut adalah target implementasi hasil pembahasan:
 
+Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan manual,
+penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
+Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
+halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
+Timeout connect/sync, watchdog acknowledgment, pengambilalihan koneksi, dan reset Presence
+startup mengikuti tiket lanjutan tahap 6.
+
 - Batas backoff 1, 2, 4, 8, 16, lalu 30 detik; jeda dipilih acak antara 50–100% batas. Retry gangguan sementara tidak dibatasi jumlahnya. Penghitung di-reset setelah menerima `sync` valid, bukan saat socket terbuka.
 - Pembukaan socket dan penantian `sync` pertama masing-masing dibatasi 15 detik. Heartbeat aplikasi tetap setiap 15 detik dan mendapat acknowledgment server melalui kontrak bersama; tidak ada `sync`/ack valid selama 45 detik memicu pemulihan koneksi.
 - Selama gangguan sementara (termasuk close 1011), Content terakhir tetap tampil dan Playlist terus berputar. Indikator kecil menyediakan tombol Coba sekarang. Sebelum `sync` pertama, tampilkan Menghubungkan.
