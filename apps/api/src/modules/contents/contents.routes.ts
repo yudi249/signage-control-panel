@@ -7,16 +7,32 @@ import {
 } from "@signage/shared";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { AppError } from "../../platform/errors.ts";
+import { AppError, badRequest } from "../../platform/errors.ts";
 import type { ContentsService } from "./contents.service.ts";
 import { createObjectName, type ContentStorage } from "./contents.storage.ts";
 
 const idParams = z.object({ id: z.string().uuid() });
 
+interface PlaylistsIntegrityApi {
+  isContentReferenced?(contentId: string): Promise<boolean>;
+}
+
+interface DevicesIntegrityApi {
+  listPushedByContent?(contentId: string): Promise<Array<{ id: string }>>;
+  setActiveContent?(id: string, pushedContentId: string | null): Promise<unknown | null>;
+}
+
+interface PresenceNotifyApi {
+  sendSync(deviceId: string): Promise<void>;
+}
+
 export interface ContentsRoutesOptions {
   service: ContentsService;
   storage?: ContentStorage | null;
   bucket?: string;
+  playlistsService?: PlaylistsIntegrityApi | null;
+  devicesService?: DevicesIntegrityApi | null;
+  presenceService?: PresenceNotifyApi | null;
 }
 
 interface ParsedPart {
@@ -70,7 +86,7 @@ function parseMultipart(body: Buffer, boundary: string): ParsedPart[] {
 }
 
 export const contentsRoutes: FastifyPluginAsync<ContentsRoutesOptions> = async (app, opts) => {
-  const { service, storage, bucket = "contents" } = opts;
+  const { service, storage, bucket = "contents", playlistsService, devicesService, presenceService } = opts;
 
   app.addContentTypeParser(
     "multipart/form-data",
@@ -155,7 +171,30 @@ export const contentsRoutes: FastifyPluginAsync<ContentsRoutesOptions> = async (
 
   app.delete("/contents/:id", async (req, reply) => {
     const { id } = idParams.parse(req.params);
+
+    if (playlistsService?.isContentReferenced && await playlistsService.isContentReferenced(id)) {
+      throw badRequest("Content masih digunakan di playlist. Lepas Content dari semua playlist terlebih dahulu sebelum menghapus.");
+    }
+
+    let affectedDeviceIds: string[] = [];
+    if (devicesService?.listPushedByContent) {
+      const pushedDevices = await devicesService.listPushedByContent(id);
+      if (pushedDevices.length > 0) {
+        for (const device of pushedDevices) {
+          if (devicesService.setActiveContent) {
+            await devicesService.setActiveContent(device.id, null);
+          }
+          affectedDeviceIds.push(device.id);
+        }
+      }
+    }
+
     await service.delete(id);
+
+    if (affectedDeviceIds.length > 0 && presenceService?.sendSync) {
+      await Promise.all(affectedDeviceIds.map((deviceId) => presenceService.sendSync(deviceId)));
+    }
+
     return reply.status(204).send();
   });
 };

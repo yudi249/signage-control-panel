@@ -41,6 +41,11 @@ export class PlaylistsService {
     return this.repo.getInternal(deviceId);
   }
 
+  async isContentReferenced(contentId: string): Promise<boolean> {
+    if (!this.repo) return false;
+    return this.repo.isContentReferenced(contentId);
+  }
+
   async replace(deviceId: string, body: ReplacePlaylistRequest): Promise<PlaylistItemResponse[]> {
     const parsed = replacePlaylistRequestSchema.parse(body);
     const device = await this.devices.findById(deviceId);

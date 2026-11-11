@@ -83,6 +83,35 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         ? new PresenceService(app, opts.db, devicesService, contentsService, playlistsService)
         : null;
 
+  if (contentsService && typeof (contentsService as any).setDeleteIntegrity === "function") {
+    (contentsService as any).setDeleteIntegrity({
+      isReferencedInPlaylist: async (contentId: string) => {
+        if (playlistsService && typeof (playlistsService as any).isContentReferenced === "function") {
+          return (playlistsService as any).isContentReferenced(contentId);
+        }
+        return false;
+      },
+      releasePushedContent: async (contentId: string) => {
+        const pushedDevices =
+          devicesService && typeof (devicesService as any).listPushedByContent === "function"
+            ? await (devicesService as any).listPushedByContent(contentId)
+            : [];
+        const affectedIds: string[] = [];
+        for (const device of pushedDevices ?? []) {
+          if (devicesService && typeof (devicesService as any).setActiveContent === "function") {
+            await (devicesService as any).setActiveContent(device.id, null);
+          }
+          affectedIds.push(device.id);
+        }
+        return affectedIds;
+      },
+      notifyDevices: async (deviceIds: string[]) => {
+        if (!presenceService || typeof (presenceService as any).sendSync !== "function") return;
+        await Promise.all(deviceIds.map((id) => (presenceService as any).sendSync(id)));
+      },
+    });
+  }
+
   await app.register(authModule, { prefix: "/api", config: opts.config });
   await app.register(devicesModule, {
     prefix: "/api",
@@ -97,6 +126,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     service: contentsService ?? undefined,
     storage: opts.storage ?? undefined,
     bucket: opts.config.SUPABASE_STORAGE_BUCKET ?? "contents",
+    playlistsService,
+    devicesService,
+    presenceService,
   });
   await app.register(playlistsModule, {
     prefix: "/api",
