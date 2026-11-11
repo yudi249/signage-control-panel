@@ -49,7 +49,7 @@ function renderContent(content: Content) {
     case "video":
       return (
         <div className="flex h-full items-center justify-center bg-black">
-          <video src={content.payload} className="max-h-full max-w-full" controls autoPlay loop />
+          <video src={content.payload} className="max-h-full max-w-full" autoPlay />
         </div>
       );
     case "url":
@@ -74,6 +74,7 @@ export function DeviceClientPage() {
   const [token, setToken] = useState<string | null>(() => getStoredToken(id));
   const [tokenDraft, setTokenDraft] = useState("");
   const [sync, setSync] = useState<SyncMessage | undefined>(undefined);
+  const [playlistIndex, setPlaylistIndex] = useState(0);
   const [state, setState] = useState<ScreenState>(() =>
     getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" },
   );
@@ -89,9 +90,23 @@ export function DeviceClientPage() {
   useEffect(() => {
     setToken(getStoredToken(id));
     setSync(undefined);
+    setPlaylistIndex(0);
     attemptRef.current = 0;
     setState(getStoredToken(id) ? { kind: "connecting" } : { kind: "needs-token" });
   }, [id]);
+
+  useEffect(() => {
+    if (sync) setPlaylistIndex(0);
+  }, [sync]);
+
+  useEffect(() => {
+    if (!sync || sync.mode !== "playlist" || sync.playlist.length === 0) return;
+    const item = sync.playlist[playlistIndex % sync.playlist.length];
+    const timeoutId = window.setTimeout(() => {
+      setPlaylistIndex((i) => (i + 1) % sync.playlist.length);
+    }, item.durationSeconds * 1000);
+    return () => window.clearTimeout(timeoutId);
+  }, [sync, playlistIndex]);
 
   const clearReconnect = () => {
     if (reconnectRef.current) window.clearTimeout(reconnectRef.current);
@@ -104,6 +119,7 @@ export function DeviceClientPage() {
       setToken(null);
       setTokenDraft("");
       setSync(undefined);
+      setPlaylistIndex(0);
       attemptRef.current = 0;
       setState({ kind: "needs-token", notice });
     },
@@ -221,6 +237,7 @@ export function DeviceClientPage() {
               setStoredToken(id, value);
               setToken(value);
               setSync(undefined);
+              setPlaylistIndex(0);
               attemptRef.current = 0;
               setState({ kind: "connecting" });
             }}
@@ -274,6 +291,11 @@ export function DeviceClientPage() {
 
   if (sync.mode === "push" && sync.pushed) {
     return <div className="h-screen w-screen bg-black text-white">{renderContent(sync.pushed)}</div>;
+  }
+
+  if (sync.mode === "playlist" && sync.playlist.length > 0) {
+    const item = sync.playlist[playlistIndex % sync.playlist.length];
+    return <div className="h-screen w-screen bg-black text-white">{renderContent(item.content)}</div>;
   }
 
   return (
