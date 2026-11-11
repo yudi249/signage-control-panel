@@ -1,7 +1,7 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "@tanstack/react-router";
 import type { Content, SyncMessage } from "@signage/shared";
-import { syncMessageSchema } from "@signage/shared";
+import { deviceServerMessageSchema } from "@signage/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -119,13 +119,16 @@ function DeviceClient({ id }: { id: string }) {
     let ws: WebSocket | null = null;
     let closed = false;
     let heartbeat: number | undefined;
+    let watchdog: number | undefined;
     let reconnect: number | undefined;
 
     function cancelAttempt() {
       window.clearTimeout(reconnect);
       window.clearInterval(heartbeat);
+      window.clearTimeout(watchdog);
       reconnect = undefined;
       heartbeat = undefined;
+      watchdog = undefined;
       const previous = ws;
       ws = null;
       if (previous) {
@@ -160,6 +163,13 @@ function DeviceClient({ id }: { id: string }) {
       }
 
       const isActive = () => !closed && ws === current;
+      let synchronized = false;
+      const refreshWatchdog = () => {
+        window.clearTimeout(watchdog);
+        watchdog = window.setTimeout(() => {
+          if (isActive()) scheduleReconnect();
+        }, 45000);
+      };
       current.onopen = () => {
         if (!isActive()) return;
         current.send(JSON.stringify({ type: "hello", deviceId: id, token }));
@@ -173,8 +183,14 @@ function DeviceClient({ id }: { id: string }) {
         if (!isActive()) return;
         try {
           const parsed = JSON.parse(String(ev.data));
-          const msg = syncMessageSchema.safeParse(parsed);
+          const msg = deviceServerMessageSchema.safeParse(parsed);
           if (msg.success) {
+            if (msg.data.type === "heartbeat_ack") {
+              if (synchronized) refreshWatchdog();
+              return;
+            }
+            synchronized = true;
+            refreshWatchdog();
             attemptRef.current = 0;
             setState({ kind: "connected" });
             setPlaylistIndex(0);

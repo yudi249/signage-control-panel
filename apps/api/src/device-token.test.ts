@@ -208,13 +208,59 @@ describe("device token and /ws/device auth", () => {
     const online = await onlineP;
     expect(online.deviceId).toBe(deviceId);
 
+    const ackP = waitForMessage(wsOk, (m) => m.type === "heartbeat_ack");
     wsOk.send(JSON.stringify({ type: "heartbeat" }));
+    expect(await ackP).toEqual({ type: "heartbeat_ack" });
 
     const offlineP = waitForMessage(admin, (m) => m.type === "presence" && m.status === "offline");
     wsOk.close();
     const offline = await offlineP;
     expect(offline.status).toBe("offline");
     admin.close();
+  });
+
+  it("heartbeat tanpa autentikasi ditolak tanpa ack; koneksi pengganti tetap menerima ack setelah socket lama ditutup", async () => {
+    const deviceId = "11111111-1111-4111-8111-111111111111";
+    const device = { id: deviceId, tokenHash: hashToken("valid"), pushedContentId: null };
+    const app = await buildApp({ config: { HOST: "127.0.0.1", PORT: 0, ...AUTH } as any, db: null,
+      devicesService: { list: async () => [], findById: async () => device, setPresence: async () => null } as any } as any);
+    apps.push(app);
+    const base = (await app.listen({ host: "127.0.0.1", port: 0 })).replace("http", "ws");
+    const unauthenticated = new WebSocket(`${base}/ws/device`);
+    await waitForOpen(unauthenticated);
+    const messages: unknown[] = [];
+    unauthenticated.on("message", (raw) => messages.push(JSON.parse(String(raw))));
+    const rejected = waitForClose(unauthenticated);
+    unauthenticated.send(JSON.stringify({ type: "heartbeat" }));
+    expect((await rejected).code).toBe(1008);
+    expect(messages).toEqual([]);
+
+    const first = new WebSocket(`${base}/ws/device`);
+    await waitForOpen(first);
+    const firstSync = waitForMessage(first, (m) => m.type === "sync");
+    first.send(JSON.stringify({ type: "hello", deviceId, token: "valid" }));
+    await firstSync;
+    const oldClosed = waitForClose(first);
+    const second = new WebSocket(`${base}/ws/device`);
+    await waitForOpen(second);
+    const secondSync = waitForMessage(second, (m) => m.type === "sync");
+    second.send(JSON.stringify({ type: "hello", deviceId, token: "valid" }));
+    await secondSync;
+    await oldClosed;
+    try {
+      const messages: unknown[] = [];
+      second.on("message", (raw) => messages.push(JSON.parse(String(raw))));
+      second.send("bukan json");
+      second.send(JSON.stringify({ type: "heartbeat_ack" }));
+      second.send(JSON.stringify({ type: "hello", deviceId, token: "valid" }));
+      const pong = new Promise<void>((resolve) => second.once("pong", () => resolve()));
+      second.ping();
+      await pong;
+      expect(messages).toEqual([]);
+      const ack = waitForMessage(second, (m) => m.type === "heartbeat_ack");
+      second.send(JSON.stringify({ type: "heartbeat" }));
+      expect(await ack).toEqual({ type: "heartbeat_ack" });
+    } finally { second.close(); }
   });
 });
 

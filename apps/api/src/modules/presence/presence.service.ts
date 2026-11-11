@@ -1,6 +1,7 @@
 import {
   adminClientMessageSchema,
   deviceClientMessageSchema,
+  heartbeatAckMessageSchema,
   presenceMessageSchema,
   snapshotMessageSchema,
   syncMessageSchema,
@@ -193,9 +194,9 @@ export class PresenceService {
       await this.sendSync(deviceId);
 
       socket.off("message", onFirstMessage);
-      socket.on("message", (data) => void this.onMessage(deviceId!, data));
-      socket.on("close", () => void this.onClose(deviceId!));
-      socket.on("error", () => void this.onClose(deviceId!));
+      socket.on("message", (data) => void this.onMessage(deviceId!, socket, data));
+      socket.on("close", () => void this.onClose(deviceId!, socket));
+      socket.on("error", () => void this.onClose(deviceId!, socket));
     };
 
     socket.on("message", onFirstMessage);
@@ -229,7 +230,7 @@ export class PresenceService {
     this.connections.set(deviceId, { socket, timeout });
   }
 
-  private async onMessage(deviceId: string, raw: unknown): Promise<void> {
+  private async onMessage(deviceId: string, socket: WebSocket, raw: unknown): Promise<void> {
     let parsed: unknown;
     try {
       parsed = JSON.parse(String(raw ?? ""));
@@ -240,9 +241,10 @@ export class PresenceService {
     if (!msg.success) return;
     if (msg.data.type === "heartbeat") {
       const conn = this.connections.get(deviceId);
-      if (!conn) return;
+      if (!conn || conn.socket !== socket || socket.readyState !== 1) return;
       clearTimeout(conn.timeout);
       conn.timeout = setTimeout(() => void this.onTimeout(deviceId), HEARTBEAT_TIMEOUT_MS);
+      socket.send(JSON.stringify(heartbeatAckMessageSchema.parse({ type: "heartbeat_ack" })));
     }
   }
 
@@ -257,9 +259,9 @@ export class PresenceService {
     await this.onClose(deviceId);
   }
 
-  private async onClose(deviceId: string): Promise<void> {
+  private async onClose(deviceId: string, socket?: WebSocket): Promise<void> {
     const conn = this.connections.get(deviceId);
-    if (!conn) return;
+    if (!conn || (socket && conn.socket !== socket)) return;
     clearTimeout(conn.timeout);
     if (this.connections.get(deviceId)?.socket === conn.socket) {
       this.connections.delete(deviceId);

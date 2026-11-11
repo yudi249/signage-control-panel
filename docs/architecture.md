@@ -219,6 +219,17 @@ Autentikasi: device token dikirim saat handshake. Token tak dikenal ditolak sebe
 | Server ke Device | `sync` | Keadaan lengkap: Content yang di-push, atau Playlist. Dikirim saat tersambung dan tiap ada perubahan |
 | Server ke Device | `push` / `release` | Perintah seketika |
 | Device ke Server | `heartbeat` | Setiap 15 detik |
+| Server ke Device | `heartbeat_ack` | `{ type: "heartbeat_ack" }`, hanya membalas heartbeat Device terautentikasi pada socket yang masih aktif |
+
+`deviceServerMessageSchema` adalah discriminated union `sync` dan `heartbeat_ack`;
+`heartbeatAckMessageSchema` menolak properti tambahan. Device Client memvalidasi pesan
+sebelum menggunakannya. Setelah `sync` pertama pada setiap percobaan, `sync` atau
+`heartbeat_ack` valid memperbarui watchdog 45 detik. Ack tidak mengubah tayangan,
+posisi/durasi Playlist, status sinkronisasi, atau penghitung backoff. Pesan malformed
+dan callback socket lama tidak memperpanjang watchdog. Timeout memakai jalur retry
+berjitter yang sama dengan gangguan jaringan dan mempertahankan tayangan terakhir.
+Heartbeat dan watchdog dibersihkan ketika percobaan berakhir, retry manual,
+pergantian Device/token, atau unmount.
 
 ### `/ws/admin` (Dashboard)
 
@@ -247,6 +258,7 @@ sequenceDiagram
     S-->>D: sync (Playlist atau Content yang di-push)
     loop tiap 15 dtk
         D->>S: heartbeat
+        S-->>D: heartbeat_ack
         Note over S: reset timer 45 dtk,<br/>last_seen ke DB maks 1x/menit
     end
     Note over D,S: koneksi putus atau heartbeat berhenti
@@ -271,7 +283,8 @@ Tiket 01 menerapkan pemisahan tayangan dan koneksi, backoff berjitter, pemulihan
 penolakan token, serta isolasi percobaan di halaman Device Client. Harness frontend memakai
 Vitest, jsdom, dan React Testing Library melalui `pnpm --filter @signage/web test`;
 halaman dirender dengan WebSocket, waktu, dan jitter terkontrol tanpa Supabase nyata.
-Timeout connect/sync, watchdog acknowledgment, dan pengambilalihan koneksi mengikuti
+Tiket 03 menerapkan acknowledgment heartbeat dan watchdog halaman 45 detik.
+Timeout connect/sync dan pengambilalihan koneksi mengikuti
 tiket lanjutan tahap 6. Tiket 05 menerapkan reset Presence sebelum startup server
 seperti dijelaskan di bawah.
 

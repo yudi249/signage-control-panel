@@ -198,6 +198,89 @@ it("mempertahankan Content saat 1011 dan memulihkan Push terbaru tanpa reload", 
   expect(screen.queryByRole("button", { name: "Coba sekarang" })).toBeNull();
 });
 
+it("watchdog mulai setelah sync, heartbeat tiap 15 detik, dan pesan malformed tidak menunda pemulihan 45 detik", () => {
+  start();
+  advance(30000);
+  expect(TestSocket.instances).toHaveLength(1);
+  act(() => socket().message(push("Tetap tampil")));
+  const current = socket();
+  current.send.mockClear();
+  advance(15000);
+  expect(current.send.mock.calls).toEqual([[JSON.stringify({ type: "heartbeat" })]]);
+  advance(29999);
+  act(() => {
+    current.message({ type: "sync" });
+    current.message({ type: "heartbeat_ack", mode: "idle" });
+    current.onmessage?.({ data: "bukan json" });
+  });
+  expect(current.close).not.toHaveBeenCalled();
+  advance(1);
+  expect(current.close).toHaveBeenCalledOnce();
+  expect(screen.getByText("Tetap tampil")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Coba sekarang" })).toBeTruthy();
+  advance(499);
+  expect(TestSocket.instances).toHaveLength(1);
+  advance(1);
+  expect(TestSocket.instances).toHaveLength(2);
+});
+
+it("ack memperpanjang watchdog tanpa me-reset posisi atau durasi Playlist; sync baru memperbarui batas", () => {
+  start();
+  act(() => socket().message(playlist()));
+  advance(2000);
+  advance(1000);
+  act(() => socket().message({ type: "heartbeat_ack" }));
+  expect(screen.getByText("Kedua")).toBeTruthy();
+  advance(999);
+  expect(screen.getByText("Kedua")).toBeTruthy();
+  advance(1);
+  expect(screen.getByText("Pertama")).toBeTruthy();
+  advance(40000);
+  const current = socket();
+  act(() => current.message(push("Push baru")));
+  advance(40000);
+  expect(current.close).not.toHaveBeenCalled();
+  act(() => current.message({ type: "heartbeat_ack" }));
+  advance(44999);
+  expect(current.close).not.toHaveBeenCalled();
+  expect(screen.getByText("Push baru")).toBeTruthy();
+  advance(1);
+  expect(current.close).toHaveBeenCalledOnce();
+});
+
+it("ack sebelum sync tidak menyelesaikan pemulihan atau me-reset backoff", () => {
+  start();
+  act(() => socket().disconnect());
+  advance(500);
+  act(() => { socket().open(); socket().message({ type: "heartbeat_ack" }); });
+  expect(screen.getByRole("button", { name: "Coba sekarang" })).toBeTruthy();
+  act(() => socket().disconnect());
+  advance(999);
+  expect(TestSocket.instances).toHaveLength(2);
+  advance(1);
+  expect(TestSocket.instances).toHaveLength(3);
+});
+
+it("retry manual membatalkan watchdog lama; ack callback lama tidak memperpanjang koneksi baru", () => {
+  start();
+  act(() => socket().message(push("Tayangan")));
+  advance(30000);
+  const old = socket();
+  const lateMessage = old.onmessage;
+  // Gangguan mengaktifkan tindakan manual dan harus membersihkan watchdog lama.
+  act(() => old.disconnect());
+  fireEvent.click(screen.getByRole("button", { name: "Coba sekarang" }));
+  act(() => { socket().open(); socket().message(push("Pulih")); });
+  const current = socket();
+  advance(30000);
+  expect(current.close).not.toHaveBeenCalled();
+  act(() => lateMessage?.({ data: JSON.stringify({ type: "heartbeat_ack" }) }));
+  advance(15000);
+  expect(current.close).toHaveBeenCalledOnce();
+  expect(old.send.mock.calls.filter(([data]) => data === JSON.stringify({ type: "heartbeat" }))).toHaveLength(2);
+  expect(screen.getByText("Pulih")).toBeTruthy();
+});
+
 it("Playlist terus berputar saat Offline; retry manual mempertahankan token dan Release terbaru mulai dari awal", () => {
   start();
   act(() => socket().message(playlist()));
