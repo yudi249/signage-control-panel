@@ -1,10 +1,13 @@
 import Fastify, { type FastifyInstance } from "fastify";
-import { authModule } from "./modules/auth/index.ts";
-import { contentsModule } from "./modules/contents/index.ts";
-import { devicesModule } from "./modules/devices/index.ts";
+import websocket from "@fastify/websocket";
+import fastifyJwt from "@fastify/jwt";
+import { authModule, verifyAdminRequest } from "./modules/auth/index.ts";
+import { contentsModule, ContentsRepository, ContentsService } from "./modules/contents/index.ts";
+import { devicesModule, DevicesRepository, DevicesService } from "./modules/devices/index.ts";
 import { playlistsModule } from "./modules/playlists/index.ts";
-import { presenceModule } from "./modules/presence/index.ts";
+import { presenceModule, PresenceService } from "./modules/presence/index.ts";
 import type { Config } from "./platform/config.ts";
+import { AppError, unauthorized } from "./platform/errors.ts";
 import type { EventBus } from "./platform/events.ts";
 import type { Db } from "./platform/supabase.ts";
 
@@ -12,20 +15,83 @@ export interface BuildAppOptions {
   config: Config;
   db: Db | null;
   events: EventBus;
+  devicesService?: DevicesService | null;
+  contentsService?: ContentsService | null;
+  presenceService?: PresenceService | null;
 }
 
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: true });
+  await app.register(websocket);
+  if (opts.config.JWT_SECRET) {
+    await app.register(fastifyJwt, { secret: opts.config.JWT_SECRET });
+  }
+
+  app.setErrorHandler((error, _req, reply) => {
+    if (error instanceof AppError) {
+      return reply.status(error.statusCode).send({ message: error.message });
+    }
+    const err = error as any;
+    if (err?.name === "ZodError") {
+      return reply.status(400).send({ message: "Data tidak valid", issues: err.issues });
+    }
+    if (err?.statusCode === 401 || err?.code === "FST_JWT_NO_AUTHORIZATION_IN_HEADER" || err?.code === "FST_JWT_AUTHORIZATION_TOKEN_INVALID" || err?.code === "FST_JWT_AUTHORIZATION_TOKEN_EXPIRED") {
+      return reply.status(401).send({ message: "Token tidak valid atau kedaluwarsa" });
+    }
+    const message = error instanceof Error ? error.message : "Terjadi kesalahan";
+    return reply.status(500).send({ message });
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    const url = request.raw.url ?? "";
+    if (!url.startsWith("/api/")) return;
+    if (url === "/api/auth/login") return;
+    if (!opts.config.JWT_SECRET) return; // auth not configured (e.g. legacy contexts)
+    await verifyAdminRequest(request, reply);
+  });
 
   app.get("/health", async () => ({ status: "ok" }));
 
-  await app.register(authModule, { prefix: "/api" });
-  await app.register(devicesModule, { prefix: "/api", db: opts.db });
-  await app.register(contentsModule, { prefix: "/api", db: opts.db });
+  const devicesService =
+    opts.devicesService !== undefined
+      ? opts.devicesService
+      : opts.db
+        ? new DevicesService(new DevicesRepository(opts.db))
+        : null;
+
+  const contentsService =
+    opts.contentsService !== undefined
+      ? opts.contentsService
+      : opts.db
+        ? new ContentsService(new ContentsRepository(opts.db))
+        : null;
+
+  const presenceService =
+    opts.presenceService !== undefined
+      ? opts.presenceService
+      : devicesService || opts.db
+        ? new PresenceService(app, opts.db, devicesService, contentsService)
+        : null;
+
+  await app.register(authModule, { prefix: "/api", config: opts.config });
+  await app.register(devicesModule, {
+    prefix: "/api",
+    db: opts.db,
+    service: devicesService ?? undefined,
+    contentsService,
+    presenceService,
+  });
+  await app.register(contentsModule, { prefix: "/api", db: opts.db, service: contentsService ?? undefined });
   await app.register(playlistsModule, { prefix: "/api" });
-  await app.register(presenceModule, { prefix: "/api" });
+
+  await app.register(presenceModule, {
+    db: opts.db,
+    events: opts.events,
+    devicesService,
+    contentsService,
+    service: presenceService ?? undefined,
+  });
 
   void opts.config;
-  void opts.events;
   return app;
 }

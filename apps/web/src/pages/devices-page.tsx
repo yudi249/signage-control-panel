@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import {
@@ -7,8 +7,21 @@ import {
   getCoreRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import type { CreateDevice, Device, UpdateDevice } from "@signage/shared";
+import type {
+  AdminServerMessage,
+  Content,
+  CreateDevice,
+  Device,
+  DeviceWithToken,
+  UpdateDevice,
+} from "@signage/shared";
+import {
+  adminClientMessageSchema,
+  adminServerMessageSchema,
+  deviceWithTokenSchema,
+} from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
+import { getToken, handleAuthFailure } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
@@ -37,24 +50,142 @@ export function DevicesPage() {
   const [editing, setEditing] = useState<Device | null>(null);
   const [deleting, setDeleting] = useState<Device | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeContentError, setActiveContentError] = useState<string | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
+  const [rotatingId, setRotatingId] = useState<string | null>(null);
+  const [tokenReveal, setTokenReveal] = useState<{
+    token: string;
+    deviceName: string;
+    context: "create" | "rotate";
+  } | null>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
     queryFn: () => api.get<Device[]>("/api/devices"),
   });
 
+  const contentsQuery = useQuery({
+    queryKey: ["contents"],
+    queryFn: () => api.get<Content[]>("/api/contents"),
+  });
+
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      handleAuthFailure();
+      return;
+    }
+
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${proto}//${window.location.host}/ws/admin`);
+    let opened = false;
+
+    const failAuth = () => {
+      handleAuthFailure();
+    };
+
+    const onOpen = () => {
+      opened = true;
+      const authMsg = adminClientMessageSchema.parse({ type: "auth", token });
+      ws.send(JSON.stringify(authMsg));
+    };
+
+    const onMessage = (ev: MessageEvent) => {
+      try {
+        const parsed = adminServerMessageSchema.safeParse(JSON.parse(String(ev.data)));
+        if (!parsed.success) return;
+        const msg: AdminServerMessage = parsed.data;
+        qc.setQueryData<Device[]>(["devices"], (prev) => {
+          if (!prev) return prev;
+          if (msg.type === "snapshot") {
+            const byId = new Map(msg.devices.map((d) => [d.deviceId, d]));
+            return prev.map((d) => {
+              const p = byId.get(d.id);
+              return p ? { ...d, status: p.status, lastSeen: p.lastSeen } : d;
+            });
+          }
+          if (msg.type === "presence") {
+            return prev.map((d) =>
+              d.id === msg.deviceId ? { ...d, status: msg.status, lastSeen: msg.lastSeen } : d,
+            );
+          }
+          return prev;
+        });
+      } catch {
+        // ignore malformed messages
+      }
+    };
+
+    const onClose = () => {
+      if (!opened) {
+        failAuth();
+        return;
+      }
+      failAuth();
+    };
+
+    const onError = () => {
+      failAuth();
+    };
+
+    ws.addEventListener("open", onOpen);
+    ws.addEventListener("message", onMessage);
+    ws.addEventListener("close", onClose);
+    ws.addEventListener("error", onError);
+    return () => {
+      ws.removeEventListener("open", onOpen);
+      ws.removeEventListener("message", onMessage);
+      ws.removeEventListener("close", onClose);
+      ws.removeEventListener("error", onError);
+      try { ws.close(); } catch { /* ignore */ }
+    };
+  }, [qc]);
+
   const saveMutation = useMutation({
     mutationFn: async (values: CreateDevice | UpdateDevice) => {
       if (editing) return api.patch<Device>(`/api/devices/${editing.id}`, values);
-      return api.post<Device>("/api/devices", values);
+      const res = await api.post<DeviceWithToken>("/api/devices", values);
+      return deviceWithTokenSchema.parse(res);
     },
-    onSuccess: async () => {
+    onSuccess: async (result, _values, _ctx) => {
       await qc.invalidateQueries({ queryKey: ["devices"] });
       setFormOpen(false);
+      const wasEditing = !!editing;
+      const name = editing?.nama;
       setEditing(null);
       setActionError(null);
+      if (!wasEditing) {
+        const created = result as DeviceWithToken;
+        setCopyNotice(null);
+        setTokenReveal({
+          token: created.token,
+          deviceName: created.device.nama,
+          context: "create",
+        });
+      } else if (name) {
+        // no token reveal on edit
+        void name;
+      }
     },
     onError: (err) => setActionError(errorMessage(err)),
+  });
+
+  const rotateTokenMutation = useMutation({
+    mutationFn: async (device: Device) => {
+      setRotatingId(device.id);
+      const res = await api.post<DeviceWithToken>(`/api/devices/${device.id}/token`, {});
+      return { parsed: deviceWithTokenSchema.parse(res), deviceName: device.nama };
+    },
+    onSuccess: async ({ parsed, deviceName }) => {
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+      setRotateError(null);
+      setCopyNotice(null);
+      setTokenReveal({ token: parsed.token, deviceName, context: "rotate" });
+    },
+    onError: (err) => setRotateError(errorMessage(err)),
+    onSettled: () => setRotatingId(null),
   });
 
   const deleteMutation = useMutation({
@@ -63,8 +194,35 @@ export function DevicesPage() {
       await qc.invalidateQueries({ queryKey: ["devices"] });
       setDeleting(null);
       setActionError(null);
+      setRotateError(null);
     },
     onError: (err) => setActionError(errorMessage(err)),
+  });
+
+  const setActiveContentMutation = useMutation({
+    mutationFn: async ({ deviceId, contentId }: { deviceId: string; contentId: string }) => {
+      setPendingDeviceId(deviceId);
+      return api.put<Device>(`/api/devices/${deviceId}/active-content`, { contentId });
+    },
+    onSuccess: async () => {
+      setActiveContentError(null);
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (err) => setActiveContentError(errorMessage(err)),
+    onSettled: () => setPendingDeviceId(null),
+  });
+
+  const clearActiveContentMutation = useMutation({
+    mutationFn: async (deviceId: string) => {
+      setPendingDeviceId(deviceId);
+      return api.delete<Device>(`/api/devices/${deviceId}/active-content`);
+    },
+    onSuccess: async () => {
+      setActiveContentError(null);
+      await qc.invalidateQueries({ queryKey: ["devices"] });
+    },
+    onError: (err) => setActiveContentError(errorMessage(err)),
+    onSettled: () => setPendingDeviceId(null),
   });
 
   const form = useForm({
@@ -111,13 +269,65 @@ export function DevicesPage() {
           return v ? new Date(v).toLocaleString() : "-";
         },
       }),
+      columnHelper.accessor("pushedContentId", {
+        header: "Konten aktif",
+        cell: ({ row }) => {
+          const device = row.original;
+          const busy = pendingDeviceId === device.id;
+          const contents = contentsQuery.data ?? [];
+          return (
+            <div className="flex items-center gap-2">
+              <select
+                className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
+                value={device.pushedContentId ?? ""}
+                disabled={busy || contentsQuery.isLoading}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setActiveContentError(null);
+                  if (!value) return;
+                  setActiveContentMutation.mutate({ deviceId: device.id, contentId: value });
+                }}
+              >
+                <option value="">(tidak ada)</option>
+                {contents.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.judul}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !device.pushedContentId}
+                onClick={() => {
+                  setActiveContentError(null);
+                  clearActiveContentMutation.mutate(device.id);
+                }}
+              >
+                Kosongkan
+              </Button>
+            </div>
+          );
+        },
+      }),
       columnHelper.display({
         id: "actions",
         header: "Aksi",
         cell: ({ row }) => (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => openEdit(row.original)}>
               Ubah
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={rotatingId === row.original.id}
+              onClick={() => {
+                setRotateError(null);
+                rotateTokenMutation.mutate(row.original);
+              }}
+            >
+              {rotatingId === row.original.id ? "Memutar..." : "Rotasi token"}
             </Button>
             <Button
               variant="destructive"
@@ -133,7 +343,15 @@ export function DevicesPage() {
         ),
       }),
     ],
-    [],
+    [
+      clearActiveContentMutation,
+      contentsQuery.data,
+      contentsQuery.isLoading,
+      pendingDeviceId,
+      rotateTokenMutation,
+      rotatingId,
+      setActiveContentMutation,
+    ],
   );
 
   const table = useReactTable({
@@ -141,6 +359,16 @@ export function DevicesPage() {
     columns,
     getCoreRowModel: getCoreRowModel(),
   });
+
+  async function copyToken() {
+    if (!tokenReveal) return;
+    try {
+      await navigator.clipboard.writeText(tokenReveal.token);
+      setCopyNotice("Token disalin.");
+    } catch {
+      setCopyNotice("Gagal menyalin otomatis. Salin token secara manual.");
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -154,6 +382,8 @@ export function DevicesPage() {
           {devicesQuery.isError && (
             <p className="text-sm text-destructive">{errorMessage(devicesQuery.error)}</p>
           )}
+          {activeContentError && <p className="mb-2 text-sm text-destructive">{activeContentError}</p>}
+          {rotateError && <p className="mb-2 text-sm text-destructive">{rotateError}</p>}
           {devicesQuery.isSuccess && (
             <Table>
               <TableHeader>
@@ -170,7 +400,7 @@ export function DevicesPage() {
               <TableBody>
                 {table.getRowModel().rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
                       Belum ada device.
                     </TableCell>
                   </TableRow>
@@ -266,6 +496,48 @@ export function DevicesPage() {
               onClick={() => deleting && deleteMutation.mutate(deleting.id)}
             >
               {deleteMutation.isPending ? "Menghapus..." : "Hapus"}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={!!tokenReveal}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTokenReveal(null);
+            setCopyNotice(null);
+          }
+        }}
+        title={tokenReveal?.context === "rotate" ? "Token baru device" : "Token device baru"}
+      >
+        <div className="space-y-4">
+          <p className="text-sm">
+            Device token untuk <strong>{tokenReveal?.deviceName}</strong>{" "}
+            {tokenReveal?.context === "rotate" ? "berhasil dirotasi." : "berhasil dibuat."}
+          </p>
+          <div className="rounded-md border bg-muted p-3">
+            <p className="break-all font-mono text-sm">{tokenReveal?.token}</p>
+          </div>
+          <p className="text-sm font-medium text-destructive">
+            Salin token ini sekarang. Token hanya ditampilkan sekali dan tidak akan ditampilkan lagi di daftar, detail, atau form ubah Device.{" "}
+            {tokenReveal?.context === "rotate"
+              ? "Token lama sudah tidak berlaku; perbarui token pada Device Client."
+              : "Gunakan token ini untuk memasangkan Device Client."}
+          </p>
+          {copyNotice && <p className="text-sm text-muted-foreground">{copyNotice}</p>}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => void copyToken()}>
+              Salin token
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                setTokenReveal(null);
+                setCopyNotice(null);
+              }}
+            >
+              Saya sudah menyalin
             </Button>
           </div>
         </div>
