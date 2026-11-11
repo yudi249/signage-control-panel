@@ -13,12 +13,14 @@ import type {
   CreateDevice,
   Device,
   DeviceWithToken,
+  PlaylistItemResponse,
   UpdateDevice,
 } from "@signage/shared";
 import {
   adminClientMessageSchema,
   adminServerMessageSchema,
   deviceWithTokenSchema,
+  playlistResponseSchema,
 } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
 import { getToken, handleAuthFailure } from "@/lib/auth";
@@ -60,6 +62,12 @@ export function DevicesPage() {
   } | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
   const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
+  const [playlistDevice, setPlaylistDevice] = useState<Device | null>(null);
+  const [playlistItems, setPlaylistItems] = useState<PlaylistItemResponse[]>([]);
+  const [playlistError, setPlaylistError] = useState<string | null>(null);
+  const [playlistNotice, setPlaylistNotice] = useState<string | null>(null);
+  const [newPlaylistContentId, setNewPlaylistContentId] = useState("");
+  const [newPlaylistDuration, setNewPlaylistDuration] = useState("10");
 
   const devicesQuery = useQuery({
     queryKey: ["devices"],
@@ -70,6 +78,21 @@ export function DevicesPage() {
     queryKey: ["contents"],
     queryFn: () => api.get<Content[]>("/api/contents"),
   });
+
+  const playlistQuery = useQuery({
+    queryKey: ["playlist", playlistDevice?.id],
+    queryFn: async () => {
+      const res = await api.get<PlaylistItemResponse[]>(`/api/devices/${playlistDevice!.id}/playlist`);
+      return playlistResponseSchema.parse(res);
+    },
+    enabled: !!playlistDevice,
+  });
+
+  useEffect(() => {
+    if (playlistQuery.data) {
+      setPlaylistItems(playlistQuery.data);
+    }
+  }, [playlistQuery.data]);
 
   useEffect(() => {
     const token = getToken();
@@ -225,6 +248,30 @@ export function DevicesPage() {
     onSettled: () => setPendingDeviceId(null),
   });
 
+  const savePlaylistMutation = useMutation({
+    mutationFn: async ({ deviceId, items }: { deviceId: string; items: PlaylistItemResponse[] }) => {
+      const payload = {
+        items: items.map((item, index) => ({
+          contentId: item.content.id,
+          position: index,
+          durationSeconds: item.durationSeconds,
+        })),
+      };
+      const res = await api.put<PlaylistItemResponse[]>(`/api/devices/${deviceId}/playlist`, payload);
+      return playlistResponseSchema.parse(res);
+    },
+    onSuccess: (data) => {
+      setPlaylistItems(data);
+      setPlaylistError(null);
+      setPlaylistNotice("Playlist berhasil disimpan.");
+      void qc.invalidateQueries({ queryKey: ["playlist", playlistDevice?.id] });
+    },
+    onError: (err) => {
+      setPlaylistNotice(null);
+      setPlaylistError(errorMessage(err));
+    },
+  });
+
   const form = useForm({
     defaultValues: { nama: editing?.nama ?? "", lokasi: editing?.lokasi ?? "" },
     onSubmit: async ({ value }) => {
@@ -248,6 +295,71 @@ export function DevicesPage() {
     setActionError(null);
     form.reset({ nama: device.nama, lokasi: device.lokasi });
     setFormOpen(true);
+  }
+
+  function openPlaylist(device: Device) {
+    setPlaylistDevice(device);
+    setPlaylistError(null);
+    setPlaylistNotice(null);
+    setNewPlaylistContentId("");
+    setNewPlaylistDuration("10");
+  }
+
+  function addPlaylistItem() {
+    setPlaylistError(null);
+    setPlaylistNotice(null);
+    if (!newPlaylistContentId) {
+      setPlaylistError("Pilih konten untuk ditambahkan ke playlist.");
+      return;
+    }
+    const duration = Number.parseInt(newPlaylistDuration, 10);
+    if (!Number.isInteger(duration) || duration <= 0) {
+      setPlaylistError("Durasi harus berupa bilangan bulat lebih dari 0.");
+      return;
+    }
+    const content = (contentsQuery.data ?? []).find((c) => c.id === newPlaylistContentId);
+    if (!content) {
+      setPlaylistError("Konten tidak ditemukan.");
+      return;
+    }
+    setPlaylistItems((prev) => [
+      ...prev,
+      { position: prev.length, durationSeconds: duration, content },
+    ]);
+    setNewPlaylistContentId("");
+    setNewPlaylistDuration("10");
+  }
+
+  function updatePlaylistDuration(index: number, value: string) {
+    setPlaylistNotice(null);
+    const duration = Number.parseInt(value, 10);
+    setPlaylistItems((prev) =>
+      prev.map((item, i) =>
+        i === index
+          ? { ...item, durationSeconds: Number.isNaN(duration) ? 0 : duration }
+          : item,
+      ),
+    );
+  }
+
+  function movePlaylistItem(index: number, direction: -1 | 1) {
+    setPlaylistNotice(null);
+    setPlaylistItems((prev) => {
+      const nextIndex = index + direction;
+      if (nextIndex < 0 || nextIndex >= prev.length) return prev;
+      const copy = [...prev];
+      const [moved] = copy.splice(index, 1);
+      if (!moved) return prev;
+      copy.splice(nextIndex, 0, moved);
+      return copy.map((item, i) => ({ ...item, position: i }));
+    });
+  }
+
+  function removePlaylistItem(index: number) {
+    setPlaylistNotice(null);
+    setPlaylistItems((prev) =>
+      prev.filter((_, i) => i !== index).map((item, i) => ({ ...item, position: i })),
+    );
   }
 
   const columns = useMemo(
@@ -317,6 +429,9 @@ export function DevicesPage() {
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => openEdit(row.original)}>
               Ubah
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => openPlaylist(row.original)}>
+              Playlist
             </Button>
             <Button
               variant="outline"
@@ -538,6 +653,176 @@ export function DevicesPage() {
               }}
             >
               Saya sudah menyalin
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={!!playlistDevice}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPlaylistDevice(null);
+            setPlaylistError(null);
+            setPlaylistNotice(null);
+          }
+        }}
+        title={playlistDevice ? `Playlist: ${playlistDevice.nama}` : "Playlist"}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Susun item (konten dan durasi detik), atur urutan, lalu simpan sebagai pengganti seluruh playlist perangkat.
+          </p>
+
+          {playlistQuery.isLoading && <p className="text-sm text-muted-foreground">Memuat playlist...</p>}
+          {playlistQuery.isError && (
+            <p className="text-sm text-destructive">{errorMessage(playlistQuery.error)}</p>
+          )}
+
+          {!playlistQuery.isLoading && !playlistQuery.isError && (
+            <>
+              {playlistItems.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Belum ada item di playlist.</p>
+              ) : (
+                <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                  {playlistItems.map((item, index) => (
+                    <div key={`${item.content.id}-${index}`} className="rounded-md border p-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">
+                            {index + 1}. {item.content.judul}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {item.content.tipe} · {item.content.id}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={index === 0}
+                            onClick={() => movePlaylistItem(index, -1)}
+                            aria-label="Naikkan"
+                          >
+                            ↑
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={index === playlistItems.length - 1}
+                            onClick={() => movePlaylistItem(index, 1)}
+                            aria-label="Turunkan"
+                          >
+                            ↓
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => removePlaylistItem(index)}
+                          >
+                            Hapus
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex items-center gap-2">
+                        <Label htmlFor={`durasi-${index}`} className="text-xs">
+                          Durasi (detik)
+                        </Label>
+                        <Input
+                          id={`durasi-${index}`}
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="h-8 w-24"
+                          value={String(item.durationSeconds)}
+                          onChange={(e) => updatePlaylistDuration(index, e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-md border p-3">
+                <p className="mb-2 text-sm font-medium">Tambah item</p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="new-playlist-content">Konten</Label>
+                    <select
+                      id="new-playlist-content"
+                      className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={newPlaylistContentId}
+                      onChange={(e) => setNewPlaylistContentId(e.target.value)}
+                      disabled={contentsQuery.isLoading}
+                    >
+                      <option value="">Pilih konten</option>
+                      {(contentsQuery.data ?? []).map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.judul} ({c.tipe})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="w-28 space-y-1">
+                    <Label htmlFor="new-playlist-duration">Durasi</Label>
+                    <Input
+                      id="new-playlist-duration"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={newPlaylistDuration}
+                      onChange={(e) => setNewPlaylistDuration(e.target.value)}
+                    />
+                  </div>
+                  <Button type="button" variant="outline" onClick={addPlaylistItem}>
+                    Tambah
+                  </Button>
+                </div>
+                {contentsQuery.isError && (
+                  <p className="mt-2 text-sm text-destructive">
+                    Gagal memuat daftar konten: {errorMessage(contentsQuery.error)}
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {playlistError && <p className="text-sm text-destructive">{playlistError}</p>}
+          {playlistNotice && <p className="text-sm text-green-600">{playlistNotice}</p>}
+
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setPlaylistDevice(null);
+                setPlaylistError(null);
+                setPlaylistNotice(null);
+              }}
+            >
+              Tutup
+            </Button>
+            <Button
+              type="button"
+              disabled={!playlistDevice || savePlaylistMutation.isPending || playlistQuery.isLoading}
+              onClick={() => {
+                if (!playlistDevice) return;
+                setPlaylistNotice(null);
+                const invalid = playlistItems.find(
+                  (item) => !Number.isInteger(item.durationSeconds) || item.durationSeconds <= 0,
+                );
+                if (invalid) {
+                  setPlaylistError("Durasi setiap item harus bilangan bulat lebih dari 0.");
+                  return;
+                }
+                setPlaylistError(null);
+                savePlaylistMutation.mutate({ deviceId: playlistDevice.id, items: playlistItems });
+              }}
+            >
+              {savePlaylistMutation.isPending ? "Menyimpan..." : "Simpan playlist"}
             </Button>
           </div>
         </div>
