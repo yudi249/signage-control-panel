@@ -30,7 +30,7 @@ function clearStoredToken(deviceId: string) {
   }
 }
 
-function renderContent(content: Content) {
+function renderContent(content: Content, loopVideo = false) {
   switch (content.tipe) {
     case "text":
       return (
@@ -49,7 +49,7 @@ function renderContent(content: Content) {
     case "video":
       return (
         <div className="flex h-full items-center justify-center bg-black">
-          <video src={content.payload} className="max-h-full max-w-full" autoPlay />
+          <video src={content.payload} className="max-h-full max-w-full" autoPlay loop={loopVideo} playsInline />
         </div>
       );
     case "url":
@@ -347,7 +347,7 @@ function DeviceClient({ id }: { id: string }) {
   }
 
   if (sync.mode === "push" && sync.pushed) {
-    return <div className="h-screen w-screen bg-black text-white"><Fragment key={syncGeneration}>{renderContent(sync.pushed)}</Fragment>{recovery}</div>;
+    return <div className="h-screen w-screen bg-black text-white"><Fragment key={syncGeneration}>{renderContent(sync.pushed, true)}</Fragment>{recovery}</div>;
   }
 
   if (sync.mode === "playlist" && sync.playlist.length > 0) {

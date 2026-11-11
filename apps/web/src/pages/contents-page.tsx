@@ -1,12 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
 import type { Content, ContentType, CreateContent, UpdateContent } from "@signage/shared";
 import { ALLOWED_UPLOAD_MIME_TYPES, MAX_UPLOAD_SIZE_BYTES } from "@signage/shared";
 import { api, ApiError } from "@/lib/api";
@@ -15,14 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ContentPreview, contentTypeLabels as typeLabels } from "@/components/content-preview";
 
 function errorMessage(err: unknown): string {
   if (err instanceof ApiError) return err.message;
@@ -30,7 +17,6 @@ function errorMessage(err: unknown): string {
   return "Terjadi kesalahan";
 }
 
-const columnHelper = createColumnHelper<Content>();
 const TIPE_OPTIONS: { value: ContentType; label: string }[] = [
   { value: "text", label: "Teks" },
   { value: "url", label: "URL" },
@@ -41,8 +27,14 @@ const TIPE_OPTIONS: { value: ContentType; label: string }[] = [
 export function ContentsPage() {
   const qc = useQueryClient();
   const [formOpen, setFormOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [notice, setNotice] = useState<string | null>(null);
   const [editing, setEditing] = useState<Content | null>(null);
   const [deleting, setDeleting] = useState<Content | null>(null);
+  const [viewing, setViewing] = useState<Content | null>(null);
+  const [menuId, setMenuId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [uploadJudul, setUploadJudul] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -64,6 +56,7 @@ export function ContentsPage() {
       setFormOpen(false);
       setEditing(null);
       setActionError(null);
+      setNotice("Konten berhasil disimpan.");
     },
     onError: (err) => setActionError(errorMessage(err)),
   });
@@ -91,6 +84,8 @@ export function ContentsPage() {
       setUploadFile(null);
       setUploadError(null);
       if (uploadInputRef.current) uploadInputRef.current.value = "";
+      setUploadOpen(false);
+      setNotice("File berhasil diunggah. Konten siap ditambahkan ke playlist.");
     },
     onError: (err) => setUploadError(errorMessage(err)),
   });
@@ -148,59 +143,17 @@ export function ContentsPage() {
     setFormOpen(true);
   }
 
-  const columns = useMemo(
-    () => [
-      columnHelper.accessor("judul", { header: "Judul", cell: (info) => info.getValue() }),
-      columnHelper.accessor("tipe", { header: "Tipe", cell: (info) => info.getValue() }),
-      columnHelper.accessor("payload", {
-        header: "Payload/URL",
-        cell: (info) => {
-          const v = info.getValue();
-          return <span className="block max-w-xs truncate" title={v}>{v}</span>;
-        },
-      }),
-      columnHelper.accessor("createdAt", {
-        header: "Dibuat",
-        cell: (info) => new Date(info.getValue()).toLocaleString(),
-      }),
-      columnHelper.display({
-        id: "actions",
-        header: "Aksi",
-        cell: ({ row }) => (
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => openEdit(row.original)}>
-              Ubah
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                setActionError(null);
-                setDeleting(row.original);
-              }}
-            >
-              Hapus
-            </Button>
-          </div>
-        ),
-      }),
-    ],
-    [],
-  );
-
-  const table = useReactTable({
-    data: contentsQuery.data ?? [],
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+  const filteredContents = useMemo(() => (contentsQuery.data ?? []).filter((content) => content.judul.toLowerCase().includes(search.toLowerCase()) && (typeFilter === "all" || content.tipe === typeFilter)), [contentsQuery.data, search, typeFilter]);
 
   return (
-    <div className="space-y-4">
+    <div className="page-stack">
+      <div className="page-heading"><div><p className="eyebrow">Materi tayangan</p><h1>Pustaka konten</h1><p>Simpan materi sekali, gunakan di playlist berbagai Device.</p></div><div className="heading-actions"><Button variant="outline" onClick={openCreate}>Tambah Teks/URL</Button><Button onClick={() => { setUploadError(null); setUploadOpen(true); }}><span aria-hidden="true">↑</span> Unggah file</Button></div></div>
+      {notice && <p className="success-notice" role="status">{notice}</p>}
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen} title="Unggah gambar atau video">
       <Card>
         <CardHeader className="space-y-1">
-          <CardTitle>Upload Gambar/Video</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Unggah file ke Storage dan buat Content otomatis (gambar: jpeg, png, webp, gif; video: mp4, webm; maks 50 MB).
+            JPEG, PNG, WebP, GIF, MP4, atau WebM. Maksimal 50 MB per file.
           </p>
         </CardHeader>
         <CardContent>
@@ -211,7 +164,7 @@ export function ContentsPage() {
                 id="upload-judul"
                 value={uploadJudul}
                 onChange={(e) => setUploadJudul(e.target.value)}
-                placeholder="Judul content"
+                placeholder="Nama materi tayangan"
                 required
               />
             </div>
@@ -235,11 +188,12 @@ export function ContentsPage() {
           </form>
         </CardContent>
       </Card>
+      </Dialog>
 
       <Card>
-        <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle>Contents</CardTitle>
-          <Button onClick={openCreate}>Tambah Teks/URL</Button>
+        <CardHeader className="list-toolbar">
+          <CardTitle>Semua konten <span className="count-label">{contentsQuery.data?.length ?? "—"}</span></CardTitle>
+          <div className="toolbar-filters"><Input aria-label="Cari konten" placeholder="Cari judul konten…" value={search} onChange={(e) => setSearch(e.target.value)} /><select aria-label="Filter jenis konten" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="all">Semua jenis</option>{TIPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label.replace(" (URL)", "")}</option>)}</select></div>
         </CardHeader>
         <CardContent>
           {contentsQuery.isLoading && <p className="text-sm text-muted-foreground">Memuat...</p>}
@@ -247,41 +201,23 @@ export function ContentsPage() {
             <p className="text-sm text-destructive">{errorMessage(contentsQuery.error)}</p>
           )}
           {contentsQuery.isSuccess && (
-            <Table>
-              <TableHeader>
-                {table.getHeaderGroups().map((hg) => (
-                  <TableRow key={hg.id}>
-                    {hg.headers.map((h) => (
-                      <TableHead key={h.id}>
-                        {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHeader>
-              <TableBody>
-                {table.getRowModel().rows.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground">
-                      Belum ada content.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>
-                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
+            filteredContents.length === 0 ? <div className="empty-state"><strong>{contentsQuery.data?.length ? "Konten tidak ditemukan" : "Siapkan materi tayangan pertama"}</strong><p>{contentsQuery.data?.length ? "Coba judul atau jenis konten lain." : "Unggah gambar atau video, atau tambahkan teks dan tautan web."}</p></div> :
+            <div className="content-gallery">
+              {filteredContents.map((content) => <article className="gallery-card" key={content.id}>
+                <div className={`gallery-preview preview-${content.tipe}`}><ContentPreview key={`${content.id}-${content.payload}`} content={content} /></div>
+                <div className="gallery-card-info"><div className="gallery-card-title"><h3 title={content.judul}>{content.judul}</h3><div className="gallery-actions" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setMenuId((current) => current === content.id ? null : current); }} onKeyDown={(event) => { if (event.key === "Escape") { setMenuId(null); event.currentTarget.querySelector('button')?.focus(); } }}>
+                  <button type="button" className="gallery-menu-button" aria-label={`Aksi ${content.judul}`} aria-expanded={menuId === content.id} onClick={() => setMenuId(menuId === content.id ? null : content.id)}>•••</button>
+                  {menuId === content.id && <div className="gallery-action-list"><button type="button" onClick={() => { setMenuId(null); setViewing(content); }}>Lihat detail</button><button type="button" onClick={() => { setMenuId(null); openEdit(content); }}>Ubah konten</button><button type="button" className="delete-action" onClick={() => { setMenuId(null); setActionError(null); setDeleting(content); }}>Hapus konten</button></div>}
+                </div></div><div className="gallery-card-meta"><span className="type-badge">{typeLabels[content.tipe]}</span><time dateTime={content.createdAt}>{new Date(content.createdAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</time></div></div>
+              </article>)}
+            </div>
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!viewing} onOpenChange={(open) => !open && setViewing(null)} title="Detail konten">
+        {viewing && <div className="space-y-4"><div className={`gallery-preview detail-preview preview-${viewing.tipe}`}><ContentPreview key={`${viewing.id}-${viewing.payload}`} content={viewing} detail /></div><dl className="content-detail"><div><dt>Judul</dt><dd>{viewing.judul}</dd></div><div><dt>Jenis</dt><dd>{typeLabels[viewing.tipe]}</dd></div><div><dt>Dibuat</dt><dd>{new Date(viewing.createdAt).toLocaleString("id-ID")}</dd></div>{viewing.tipe !== "text" && <div><dt>URL sumber</dt><dd>{viewing.payload}</dd></div>}</dl><div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setViewing(null)}>Tutup detail</Button><Button onClick={() => { setViewing(null); openEdit(viewing); }}>Ubah konten</Button></div></div>}
+      </Dialog>
 
       <Dialog
         open={formOpen}
@@ -289,7 +225,7 @@ export function ContentsPage() {
           setFormOpen(open);
           if (!open) setEditing(null);
         }}
-        title={editing ? "Ubah Content" : "Tambah Teks/URL"}
+        title={editing ? "Ubah konten" : "Tambah Teks/URL"}
       >
         <form
           className="space-y-4"
@@ -334,7 +270,7 @@ export function ContentsPage() {
           <form.Field name="payload">
             {(field) => (
               <div className="space-y-1">
-                <Label htmlFor="payload">Payload / URL</Label>
+                <Label htmlFor="payload">Isi teks atau URL konten</Label>
                 <textarea
                   id="payload"
                   className="flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
